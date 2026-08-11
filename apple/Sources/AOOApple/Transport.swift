@@ -261,6 +261,31 @@ public final class AOOSender: @unchecked Sendable {
     }
 
     @inline(__always)
+    public func processPlanar(
+        baseAddress: UnsafePointer<Float>,
+        channelStride: Int,
+        frameOffset: Int,
+        frameCount: Int,
+        sourceChannelCount: Int? = nil,
+        sourceTimestamp: UInt64?,
+        sourcePresentationTimestamp: UInt64?
+    ) {
+        let processTime = sourceTimestamp ?? Self.currentNTPTime()
+        processPlanar(
+            baseAddress: baseAddress,
+            channelStride: channelStride,
+            frameOffset: frameOffset,
+            frameCount: frameCount,
+            sourceChannelCount: sourceChannelCount,
+            timing: AOOAudioTiming(
+                sourceSamplePosition: nextSourceSamplePosition,
+                sourceTimestamp: processTime,
+                sourcePresentationTimestamp: sourcePresentationTimestamp ?? processTime
+            )
+        )
+    }
+
+    @inline(__always)
     public func processSilence(
         frameCount: Int,
         timing: AOOAudioTiming? = nil
@@ -275,6 +300,23 @@ public final class AOOSender: @unchecked Sendable {
             timing?.sourcePresentationTimestamp ?? processTime
         )
         nextSourceSamplePosition = samplePosition &+ UInt64(frameCount)
+    }
+
+    @inline(__always)
+    public func processSilence(
+        frameCount: Int,
+        sourceTimestamp: UInt64?,
+        sourcePresentationTimestamp: UInt64?
+    ) {
+        let processTime = sourceTimestamp ?? Self.currentNTPTime()
+        processSilence(
+            frameCount: frameCount,
+            timing: AOOAudioTiming(
+                sourceSamplePosition: nextSourceSamplePosition,
+                sourceTimestamp: processTime,
+                sourcePresentationTimestamp: sourcePresentationTimestamp ?? processTime
+            )
+        )
     }
 
     public var status: AOOSenderStatus {
