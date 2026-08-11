@@ -193,6 +193,11 @@ public enum AOOPathSelectionPolicy {
         if kindDifference != 0 {
             return kindDifference < 0
         }
+        let addressDifference = addressPreference(lhs.host)
+            - addressPreference(rhs.host)
+        if addressDifference != 0 {
+            return addressDifference < 0
+        }
         let costDifference = lhs.selectionCost - rhs.selectionCost
         if abs(costDifference) > 0.25 {
             return costDifference < 0
@@ -209,6 +214,29 @@ public enum AOOPathSelectionPolicy {
         case .other: 2
         case .wifi: 3
         }
+    }
+
+    private static func addressPreference(_ host: String) -> Int {
+        let unwrapped = host.trimmingCharacters(
+            in: CharacterSet(charactersIn: "[]")
+        )
+        let address = unwrapped.split(
+            separator: "%",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        ).first.map(String.init) ?? unwrapped
+        let octets = address.split(
+            separator: ".",
+            omittingEmptySubsequences: false
+        )
+        if octets.count == 4,
+           octets.allSatisfy({ octet in
+               guard let value = Int(octet) else { return false }
+               return (0...255).contains(value)
+           }) {
+            return 0
+        }
+        return address.contains(":") ? 1 : 2
     }
 }
 
@@ -511,27 +539,30 @@ public final class AOOPeerBrowser: @unchecked Sendable {
         emit(state: .searching)
 
         remainingProbeCount = results.reduce(into: 0) { count, result in
-            count += max(1, result.interfaces.count)
+            count += max(1, result.interfaces.count) * AOOProbeIPVersion.allCases.count
         }
         for result in results {
             let interfaces: [NWInterface?] = result.interfaces.isEmpty
                 ? [nil]
                 : result.interfaces.map(Optional.some)
             for interface in interfaces {
-                let session = AOOPathProbeSession(
-                    endpoint: result.endpoint,
-                    interface: interface,
-                    queue: queue
-                ) { [weak self] candidate in
-                    guard let self, generation == self.generation else { return }
-                    if let candidate {
-                        self.candidates[candidate.id] = candidate
+                for ipVersion in AOOProbeIPVersion.allCases {
+                    let session = AOOPathProbeSession(
+                        endpoint: result.endpoint,
+                        interface: interface,
+                        ipVersion: ipVersion,
+                        queue: queue
+                    ) { [weak self] candidate in
+                        guard let self, generation == self.generation else { return }
+                        if let candidate {
+                            self.candidates[candidate.id] = candidate
+                        }
+                        self.remainingProbeCount = max(0, self.remainingProbeCount - 1)
+                        self.emit(state: self.remainingProbeCount == 0 ? .ready : .searching)
                     }
-                    self.remainingProbeCount = max(0, self.remainingProbeCount - 1)
-                    self.emit(state: self.remainingProbeCount == 0 ? .ready : .searching)
+                    probeSessions.append(session)
+                    session.start()
                 }
-                probeSessions.append(session)
-                session.start()
             }
         }
     }
@@ -559,11 +590,24 @@ public final class AOOPeerBrowser: @unchecked Sendable {
     }
 }
 
+private enum AOOProbeIPVersion: CaseIterable {
+    case v4
+    case v6
+
+    var networkVersion: NWProtocolIP.Options.Version {
+        switch self {
+        case .v4: .v4
+        case .v6: .v6
+        }
+    }
+}
+
 private final class AOOPathProbeSession: @unchecked Sendable {
     typealias Completion = @Sendable (AOOPathCandidate?) -> Void
 
     private let endpoint: NWEndpoint
     private let interface: NWInterface?
+    private let ipVersion: AOOProbeIPVersion
     private let queue: DispatchQueue
     private let completion: Completion
     private var connection: NWConnection?
@@ -575,11 +619,13 @@ private final class AOOPathProbeSession: @unchecked Sendable {
     init(
         endpoint: NWEndpoint,
         interface: NWInterface?,
+        ipVersion: AOOProbeIPVersion,
         queue: DispatchQueue,
         completion: @escaping Completion
     ) {
         self.endpoint = endpoint
         self.interface = interface
+        self.ipVersion = ipVersion
         self.queue = queue
         self.completion = completion
     }
@@ -587,6 +633,10 @@ private final class AOOPathProbeSession: @unchecked Sendable {
     func start() {
         let parameters = NWParameters.udp
         parameters.prohibitExpensivePaths = true
+        if let ipOptions = parameters.defaultProtocolStack.internetProtocol
+            as? NWProtocolIP.Options {
+            ipOptions.version = ipVersion.networkVersion
+        }
         if let interface {
             parameters.requiredInterface = interface
         }

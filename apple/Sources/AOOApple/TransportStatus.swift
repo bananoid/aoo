@@ -3,23 +3,13 @@ import Foundation
 public extension AOOSender {
     var transportStatus: AOOTransportStatus {
         let status = status
-        let health: AOOTransportHealth
-        if !status.isEnabled {
-            health = .stopped
-        } else if status.handoffDropCount > 0 || status.processErrorCount > 0 {
-            health = .failed
-        } else if status.peerResponsive {
-            health = .stable
-        } else {
-            health = .acquiring
-        }
         return AOOTransportStatus(
             isRunning: status.isEnabled,
             profile: status.profile,
             format: status.format,
             targetLatencyMilliseconds: configuration.targetLatencyMilliseconds,
             effectiveLatencyMilliseconds: configuration.targetLatencyMilliseconds,
-            health: health,
+            health: currentTransportHealth(for: status),
             statistics: AOOTransportStatistics(
                 processedFrames: status.processedFrameCount,
                 handoffDrops: status.handoffDropCount,
@@ -36,19 +26,6 @@ public extension AOOSender {
 public extension AOOReceiver {
     var transportStatus: AOOTransportStatus {
         let status = status
-        let health: AOOTransportHealth
-        if status.incompatibleStreamCount > 0 && status.lastErrorCode != 0 {
-            health = .failed
-        } else {
-            switch status.streamState {
-        case .inactive:
-            health = status.sourceChannelCount > 0 ? .acquiring : .stopped
-        case .buffering:
-            health = status.reacquisitionCount > 0 ? .reacquiring : .acquiring
-        case .active:
-            health = status.concealmentCount > 0 ? .concealing : .stable
-            }
-        }
         return AOOTransportStatus(
             isRunning: status.isReceivingStream,
             profile: status.profile,
@@ -56,7 +33,7 @@ public extension AOOReceiver {
             targetLatencyMilliseconds: status.targetLatencyMilliseconds,
             effectiveLatencyMilliseconds: status.aooInternalLatencyMilliseconds,
             bufferFillRatio: status.bufferFillRatio,
-            health: health,
+            health: currentTransportHealth(for: status),
             statistics: AOOTransportStatistics(
                 processedFrames: status.processedFrameCount,
                 latePackets: status.droppedBlockCount,
@@ -71,6 +48,30 @@ public extension AOOReceiver {
                 )
             )
         )
+    }
+}
+
+func currentTransportHealth(for status: AOOSenderStatus) -> AOOTransportHealth {
+    if !status.isEnabled {
+        return .stopped
+    }
+    if status.lastErrorCode != 0 {
+        return .failed
+    }
+    return status.peerResponsive ? .stable : .acquiring
+}
+
+func currentTransportHealth(for status: AOOReceiverStatus) -> AOOTransportHealth {
+    if status.lastErrorCode != 0 {
+        return status.incompatibleStreamCount > 0 ? .incompatible : .failed
+    }
+    switch status.streamState {
+    case .inactive:
+        return status.sourceChannelCount > 0 ? .acquiring : .stopped
+    case .buffering:
+        return .acquiring
+    case .active:
+        return .stable
     }
 }
 

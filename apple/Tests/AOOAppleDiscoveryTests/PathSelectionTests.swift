@@ -38,6 +38,17 @@ private func path(
     #expect(AOOPathSelectionPolicy.bestPath(in: [wifi, direct]) == direct)
 }
 
+@Test func directIPv4WinsOverFasterIPv6OnTheSameInterface() {
+    let ipv4 = path(host: "169.254.12.81", kind: .direct, p95: 2)
+    let ipv6 = path(host: "fe80::1234%en6", kind: .direct, p95: 0.5)
+    #expect(AOOPathSelectionPolicy.bestPath(in: [ipv6, ipv4]) == ipv4)
+}
+
+@Test func scopedIPv6RemainsAvailableAsFallback() {
+    let ipv6 = path(host: "fe80::1234%en6", kind: .direct, p95: 1)
+    #expect(AOOPathSelectionPolicy.bestPath(in: [ipv6]) == ipv6)
+}
+
 @Test func activeStreamNeverSilentlySwitchesFromViablePath() {
     let current = path(host: "wifi", kind: .wifi, p95: 8)
     let better = path(host: "direct", kind: .direct, p95: 1)

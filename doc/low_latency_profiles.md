@@ -86,6 +86,9 @@ formats, and block sizes. The default service name is `AOO Receiver`.
 
 Automatic selection prefers viable direct or wired paths, followed by other
 paths and Wi-Fi. RTT tail spread and loss break ties within an interface class.
+Each interface is probed over IPv4 and IPv6; IPv4 is preferred within the same
+interface class, while scoped IPv6 remains available when no viable IPv4 path
+exists.
 An active viable stream never silently switches to a newly discovered path;
 the better path is considered after streaming stops. A failed route requires
 an explicit stream restart.
@@ -100,7 +103,9 @@ and reading rich status are non-realtime operations. Once configured:
 - audio callbacks do not allocate, lock, sleep, perform DNS, or call Bonjour;
 - packet I/O, event handling, adaptation, and status aggregation run outside
   the audio callback;
-- callbacks may use arbitrary host block sizes up to the configured maximum.
+- callbacks may use arbitrary host block sizes up to the configured maximum
+  unless `fixedCallbackSize` is enabled; fixed mode requires every receiver
+  callback to equal `maximumCallbackFrames` exactly.
 
 The public API reports handoff drops, late packets, concealments, resends,
 reacquisitions, underruns, overruns, arrival residuals, clock drift, buffer

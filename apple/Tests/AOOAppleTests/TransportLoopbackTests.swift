@@ -5,6 +5,70 @@ import Testing
 
 @Suite(.serialized)
 struct TransportLoopbackTests {
+    @Test func idleFixedReceiverProducesCleanSilence() throws {
+        let port = testPort(offset: 3)
+        var configuration = AOOStreamConfiguration
+            .automaticReceiver(channelCapacity: 2)
+        configuration.maximumCallbackFrames = 64
+        let receiver = try AOOReceiver(
+            localPort: port,
+            configuration: configuration,
+            fixedCallbackSize: true
+        )
+        receiver.setMonitorPair(startingAtOneBased: 1)
+
+        var outputLeft = Array(repeating: Float(1), count: 64)
+        var outputRight = Array(repeating: Float(-1), count: 64)
+        for _ in 0..<8 {
+            outputLeft.withUnsafeMutableBufferPointer { left in
+                outputRight.withUnsafeMutableBufferPointer { right in
+                    receiver.processStereo(
+                        outputLeft: left.baseAddress!,
+                        outputRight: right.baseAddress!,
+                        frameCount: 64
+                    )
+                }
+            }
+        }
+
+        let status = receiver.status
+        #expect(outputLeft.allSatisfy { $0 == 0 })
+        #expect(outputRight.allSatisfy { $0 == 0 })
+        #expect(status.processCallCount == 8)
+        #expect(status.processErrorCount == 0)
+        #expect(status.processBlockMismatchCount == 0)
+        #expect(status.minimumProcessFrameCount == 64)
+        #expect(status.maximumProcessFrameCount == 64)
+        #expect(receiver.transportStatus.health == .stopped)
+    }
+
+    @Test func currentHealthIgnoresHistoricalIncidentCounters() {
+        let senderStatus = AOOSenderStatus(
+            isEnabled: true,
+            peerResponsive: true,
+            processErrorCount: 2,
+            handoffDropCount: 3
+        )
+        #expect(currentTransportHealth(for: senderStatus) == .stable)
+
+        let receiverStatus = AOOReceiverStatus(
+            streamActive: true,
+            streamState: .active,
+            sourceChannelCount: 2,
+            concealmentCount: 4,
+            reacquisitionCount: 1
+        )
+        #expect(currentTransportHealth(for: receiverStatus) == .stable)
+
+        let incompatibleStatus = AOOReceiverStatus(
+            streamState: .inactive,
+            sourceChannelCount: 2,
+            lastErrorCode: 1,
+            incompatibleStreamCount: 1
+        )
+        #expect(currentTransportHealth(for: incompatibleStatus) == .incompatible)
+    }
+
     @Test func deterministicWiredRestoresSparseTwentyChannelMap() throws {
         let port = testPort(offset: 0)
         var receiverConfiguration = AOOStreamConfiguration
