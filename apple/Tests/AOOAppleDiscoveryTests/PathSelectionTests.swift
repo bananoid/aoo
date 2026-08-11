@@ -42,6 +42,10 @@ private func path(
     let ipv4 = path(host: "169.254.12.81", kind: .direct, p95: 2)
     let ipv6 = path(host: "fe80::1234%en6", kind: .direct, p95: 0.5)
     #expect(AOOPathSelectionPolicy.bestPath(in: [ipv6, ipv4]) == ipv4)
+    #expect(AOOPathSelectionPolicy.bestPath(
+        in: [ipv6, ipv4],
+        currentHost: ipv6.host
+    ) == ipv4)
 }
 
 @Test func scopedIPv6RemainsAvailableAsFallback() {

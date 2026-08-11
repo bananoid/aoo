@@ -167,6 +167,16 @@ public enum AOOPathSelectionPolicy {
             return best
         }
 
+        let bestInterfacePreference = interfacePreference(best.interfaceKind)
+        let currentInterfacePreference = interfacePreference(current.interfaceKind)
+        if bestInterfacePreference < currentInterfacePreference {
+            return best
+        }
+        if bestInterfacePreference == currentInterfacePreference,
+           addressPreference(best.host) < addressPreference(current.host) {
+            return best
+        }
+
         let requiredImprovement = max(0.5, current.selectionCost * 0.15)
         return best.selectionCost + requiredImprovement < current.selectionCost
             ? best
