@@ -1424,15 +1424,24 @@ void startSenderProcessThread(AOOAppleSender *sender) {
         );
         auto nextDeadline = std::chrono::steady_clock::now();
         while (sender->processThreadShouldRun.load(std::memory_order_acquire)) {
-            const bool processed = processNextSenderBlock(sender);
-            if (!processed) {
+            uint64_t processedBlockCount = 0;
+            while (processNextSenderBlock(sender)) {
+                ++processedBlockCount;
+            }
+            if (processedBlockCount == 0) {
                 const AooError result = AooClient_send(sender->client, 0);
                 if (result != kAooOk && result != kAooErrorWouldBlock) {
                     sender->metrics.lastError.store(result, std::memory_order_relaxed);
                 }
             }
-            nextDeadline += std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                blockDuration
+            const uint64_t elapsedBlockCount = std::max<uint64_t>(
+                1,
+                processedBlockCount
+            );
+            nextDeadline += std::chrono::duration_cast<
+                std::chrono::steady_clock::duration
+            >(
+                blockDuration * static_cast<double>(elapsedBlockCount)
             );
             const auto now = std::chrono::steady_clock::now();
             if (nextDeadline > now) {
