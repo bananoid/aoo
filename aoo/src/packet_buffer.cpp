@@ -17,6 +17,13 @@ void sent_block::set(const data_packet& d, int16_t frame_size_)
     flags = d.flags;
     num_frames = d.num_frames;
     frame_size = frame_size_;
+    protocol_version = d.protocol_version;
+    transport_profile = d.transport_profile;
+    pcm_format = d.pcm_format;
+    absolute_sample_position = d.absolute_sample_position;
+    source_timestamp = d.source_timestamp;
+    block_frames = d.block_frames;
+    channel_count = d.channel_count;
     if (d.total_size > 0) {
         buffer_.assign(d.data, d.data + d.total_size);
     } else {
@@ -134,6 +141,9 @@ void received_block::init(int32_t seq)
     total_size = 0;
     message_size = 0;
     samplerate = 0;
+    absolute_sample_position = 0;
+    source_timestamp = 0;
+    block_frames = 0;
     channel = 0;
     received_frames = -1; // sentinel for placeholder block!
     num_tries_ = 0;
@@ -153,6 +163,9 @@ void received_block::init(const data_packet& d)
     flags = d.flags;
     tt = d.tt;
     samplerate = d.samplerate;
+    absolute_sample_position = d.absolute_sample_position;
+    source_timestamp = d.source_timestamp;
+    block_frames = d.block_frames;
     channel = d.channel;
     received_frames = 0; // !
     // keep timestamp and numtries if we're actually reiniting

@@ -461,6 +461,7 @@ endif()
 #-----------------------------------------------------------------
 if (AOO_BUILD_TESTS)
     message(STATUS "\n*** Test suite ***\n")
+    enable_testing()
     add_subdirectory(tests)
 endif()
 

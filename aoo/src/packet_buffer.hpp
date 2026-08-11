@@ -22,6 +22,13 @@ struct data_packet {
     };
     int32_t size;
     uint32_t flags;
+    uint16_t protocol_version = 0;
+    uint8_t transport_profile = 0;
+    uint8_t pcm_format = 0;
+    uint64_t absolute_sample_position = 0;
+    uint64_t source_timestamp = 0;
+    uint16_t block_frames = 0;
+    uint16_t channel_count = 0;
 };
 
 //---------------------- sent_block ---------------------------//
@@ -45,6 +52,13 @@ public:
     uint32_t flags = 0;
     int16_t num_frames = 0;
     int16_t frame_size = 0;
+    uint16_t protocol_version = 0;
+    uint8_t transport_profile = 0;
+    uint8_t pcm_format = 0;
+    uint64_t absolute_sample_position = 0;
+    uint64_t source_timestamp = 0;
+    uint16_t block_frames = 0;
+    uint16_t channel_count = 0;
 protected:
     aoo::vector<AooByte> buffer_;
 };
@@ -133,6 +147,9 @@ public:
     int32_t message_size = 0;
     uint32_t flags = 0;
     uint64_t tt = 0;
+    uint64_t absolute_sample_position = 0;
+    uint64_t source_timestamp = 0;
+    uint16_t block_frames = 0;
     double samplerate = 0;
     int16_t channel = 0;
     int16_t received_frames = 0;
@@ -230,6 +247,14 @@ public:
 
     int32_t last_popped() const {
         return last_popped_;
+    }
+
+    void advance_missing() {
+        assert(empty());
+        if (last_popped_ != sentinel) {
+            auto next = last_popped_ == INT32_MAX - 1 ? 0 : last_popped_ + 1;
+            last_popped_ = last_pushed_ = next;
+        }
     }
 
     received_block& front();

@@ -24,7 +24,8 @@ const int32_t kDataHeaderSize = kDataMaxAddrSize + 52;
 
 // binary data message:
 // args: 40 bytes max. (12 bytes min.)
-const int32_t kBinDataHeaderSize = kAooBinMsgLargeHeaderSize + 40;
+const int32_t kBinDataHeaderSize = kAooBinMsgLargeHeaderSize
+    + 40 + AOO_LOW_LATENCY_PACKET_HEADER_SIZE;
 
 //-------------------- sink_desc ------------------------//
 
@@ -675,6 +676,30 @@ AOO_API AooError AOO_CALL AooSource_process(
     return src->process(data, n, t);
 }
 
+AOO_API AooError AOO_CALL AooSource_processLowLatency(
+        AooSource *src, AooSample **data, AooInt32 n, AooNtpTime t,
+        AooUInt64 absolute_sample_position) {
+    if (!src || t == 0) {
+        return kAooErrorBadArgument;
+    }
+    return static_cast<aoo::Source *>(src)->process_low_latency(
+        data, n, t, absolute_sample_position
+    );
+}
+
+AooError aoo::Source::process_low_latency(
+        AooSample **data, AooInt32 n, AooNtpTime source_timestamp,
+        AooUInt64 absolute_sample_position) {
+    next_input_sample_position_ = absolute_sample_position;
+    next_input_timestamp_ = source_timestamp;
+    has_input_timing_ = true;
+    auto result = process(data, n, source_timestamp);
+    if (result != kAooOk) {
+        has_input_timing_ = false;
+    }
+    return result;
+}
+
 AooError AOO_CALL aoo::Source::process(
         AooSample **data, AooInt32 nsamples, AooNtpTime t) {
     // check nsamples
@@ -834,6 +859,13 @@ AooError AOO_CALL aoo::Source::process(
             std::copy(buf, buf + bufsize, ptr->data);
             // push samplerate
             ptr->sr = sr;
+            ptr->absolute_sample_position = has_input_timing_
+                ? next_input_sample_position_
+                : absolute_sample_position_;
+            ptr->source_timestamp = has_input_timing_
+                ? next_input_timestamp_.value()
+                : t;
+            has_input_timing_ = false;
 
             audio_queue_.write_commit();
         } else {
@@ -854,6 +886,19 @@ AooError AOO_CALL aoo::Source::process(
 
                 // push samplerate
                 ptr->sr = sr;
+                ptr->absolute_sample_position = has_input_timing_
+                    ? next_input_sample_position_
+                    : absolute_sample_position_;
+                ptr->source_timestamp = has_input_timing_
+                    ? next_input_timestamp_.value()
+                    : 0;
+                if (has_input_timing_) {
+                    next_input_sample_position_ += format_->blockSize;
+                    next_input_timestamp_ += aoo::time_tag::from_seconds(
+                        static_cast<double>(format_->blockSize)
+                            / format_->sampleRate
+                    );
+                }
 
                 audio_queue_.write_commit();
 
@@ -1313,6 +1358,24 @@ void Source::restart_stream() {
 void Source::make_new_stream(aoo::time_tag tt, AooData *md) {
     stream_tt_ = tt;
     sequence_ = 0;
+    absolute_sample_position_ = 0;
+    low_latency_enabled_ = false;
+    has_input_timing_ = false;
+    if (md && md->type == kAooDataBinary && md->size > 0) {
+        // startStream() temporarily stores the sample offset in md->data.
+        // Flat metadata bytes remain directly after the AooData header.
+        const auto metadata_data = reinterpret_cast<const AooByte *>(md)
+            + sizeof(AooData);
+        AooLowLatencyStreamConfiguration configuration{};
+        if (aoo_lowLatencyStreamConfigurationDecode(
+                metadata_data,
+                md->size,
+                &configuration
+            ) == kAooOk) {
+            low_latency_configuration_ = configuration;
+            low_latency_enabled_ = true;
+        }
+    }
     xrunblocks_.store(0.0); // !
     reset_timer();
 
@@ -1652,7 +1715,7 @@ void Source::send_start(const sendfn& fn){
 // binary data message:
 // stream_id (int32), seq (int32), channel (uint8), flags (uint8), data_size (uint16),
 // [total (int32), nframes (int16), frame (int16)], [msgsize (int32)], [sr (float64)],
-// [tt, (uint64)], data...
+// [tt, (uint64)], [versioned low-latency packet header], data...
 
 AooSize write_bin_data(AooByte *buffer, AooSize size,
                        AooId stream_id, const data_packet& d)
@@ -1680,6 +1743,34 @@ AooSize write_bin_data(AooByte *buffer, AooSize size,
     if (d.flags & kAooBinMsgDataTimeStamp) {
         aoo::write_bytes<uint64_t>(d.tt, it);
     }
+    if (d.flags & kAooBinMsgDataLowLatency) {
+        AooLowLatencyPacketHeader header{};
+        header.protocolVersion = d.protocol_version;
+        header.headerSize = AOO_LOW_LATENCY_PACKET_HEADER_SIZE;
+        header.profile = d.transport_profile;
+        header.pcmFormat = d.pcm_format;
+        header.streamId = static_cast<uint64_t>(
+            static_cast<uint32_t>(stream_id)
+        );
+        header.sequence = static_cast<uint32_t>(d.sequence);
+        header.absoluteSamplePosition = d.absolute_sample_position;
+        header.sourceTimestamp = d.source_timestamp;
+        header.blockFrames = d.block_frames;
+        header.fragmentIndex = static_cast<uint16_t>(d.frame_index);
+        header.fragmentCount = static_cast<uint16_t>(d.num_frames);
+        header.channelCount = d.channel_count;
+        header.payloadBytes = static_cast<uint32_t>(d.size);
+        auto result = aoo_lowLatencyPacketHeaderEncode(
+            &header,
+            it,
+            static_cast<AooSize>(size - (it - buffer))
+        );
+        assert(result == kAooOk);
+        if (result != kAooOk) {
+            return 0;
+        }
+        it += AOO_LOW_LATENCY_PACKET_HEADER_SIZE;
+    }
     // write audio data
     if (d.size > 0) {
         memcpy(it, d.data, d.size);
@@ -1687,6 +1778,26 @@ AooSize write_bin_data(AooByte *buffer, AooSize size,
     it += d.size;
 
     return (it - buffer);
+}
+
+AooByte *find_low_latency_header(AooByte *arguments, const data_packet& d) {
+    if (!(d.flags & kAooBinMsgDataLowLatency)) {
+        return nullptr;
+    }
+    auto header = arguments + 12;
+    if (d.flags & kAooBinMsgDataFrames) {
+        header += 8;
+    }
+    if (d.flags & kAooBinMsgDataStreamMessage) {
+        header += 4;
+    }
+    if (d.flags & kAooBinMsgDataSampleRate) {
+        header += 8;
+    }
+    if (d.flags & kAooBinMsgDataTimeStamp) {
+        header += 8;
+    }
+    return header;
 }
 
 // /aoo/sink/<id>/data <src> <stream_id> <seq> (<tt>) (<sr>) <channel_onset>
@@ -1789,6 +1900,13 @@ void send_packet(const aoo::vector<cached_sink>& sinks, const AooId id,
             // replace stream ID and channel
             aoo::to_bytes(s.stream_id, args);
             args[8] = s.channel;
+            if (auto header = find_low_latency_header(args, d)) {
+                constexpr auto stream_id_offset = 12;
+                aoo::to_bytes<uint64_t>(
+                    static_cast<uint64_t>(static_cast<uint32_t>(s.stream_id)),
+                    header + stream_id_offset
+                );
+            }
 
             s.ep.send(start, end - start, fn);
         }
@@ -1889,6 +2007,17 @@ void Source::send_xruns(const sendfn &fn) {
             d.size = 0;
             // omit all other flags!
             d.flags = kAooBinMsgDataXRun;
+            if (low_latency_enabled_) {
+                d.flags |= kAooBinMsgDataLowLatency;
+                d.protocol_version = low_latency_configuration_.protocolVersion;
+                d.transport_profile = low_latency_configuration_.profile;
+                d.pcm_format = low_latency_configuration_.pcmFormat;
+                d.absolute_sample_position = absolute_sample_position_;
+                d.source_timestamp = 0;
+                d.block_frames = low_latency_configuration_.blockFrames;
+                d.channel_count = low_latency_configuration_.channelCount;
+                absolute_sample_position_ += d.block_frames;
+            }
 
             // wrap around to prevent signed integer overflow
             if (sequence_ == INT32_MAX) {
@@ -2033,6 +2162,7 @@ void Source::send_data(const sendfn& fn){
         data_packet d;
         d.tt = tt;
         d.samplerate = ptr->sr;
+        d.source_timestamp = ptr->source_timestamp;
         d.channel = 0;
         d.flags = 0;
         d.msg_size = sendbuffer_.size();
@@ -2092,6 +2222,16 @@ void Source::send_data(const sendfn& fn){
         }
         if (!d.tt.is_empty()) {
             d.flags |= kAooBinMsgDataTimeStamp;
+        }
+        if (low_latency_enabled_) {
+            d.flags |= kAooBinMsgDataLowLatency;
+            d.protocol_version = low_latency_configuration_.protocolVersion;
+            d.transport_profile = low_latency_configuration_.profile;
+            d.pcm_format = low_latency_configuration_.pcmFormat;
+            d.absolute_sample_position = ptr->absolute_sample_position;
+            d.block_frames = low_latency_configuration_.blockFrames;
+            d.channel_count = low_latency_configuration_.channelCount;
+            absolute_sample_position_ = d.absolute_sample_position + d.block_frames;
         }
 
         // save block (if we have a history buffer)
@@ -2175,6 +2315,13 @@ void Source::resend_data(const sendfn &fn) {
                 d.total_size = block->size();
                 d.num_frames = block->num_frames;
                 d.flags = block->flags;
+                d.protocol_version = block->protocol_version;
+                d.transport_profile = block->transport_profile;
+                d.pcm_format = block->pcm_format;
+                d.absolute_sample_position = block->absolute_sample_position;
+                d.source_timestamp = block->source_timestamp;
+                d.block_frames = block->block_frames;
+                d.channel_count = block->channel_count;
 
                 // We need to copy all (requested) frames before sending
                 // because we temporarily release the update lock!

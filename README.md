@@ -101,6 +101,16 @@ For build instructions please see [INSTALL.md](INSTALL.md).
 
 The C API may be used for creating bindings to other languages, such as Rust, Python, Java or C#.
 
+## Low-latency branch and Apple package
+
+The `low-latency` branch contains an experimental, versioned PCM transport for
+deterministic wired paths and adaptive wireless paths. It also exports the
+SwiftPM products `AOOApple` and `AOOAppleDiscovery` for iOS 16 and macOS 13 or
+later. This branch is intentionally not wire-compatible with stock AOO peers.
+
+See [Low-Latency Stream Profiles](doc/low_latency_profiles.md) for protocol,
+realtime, discovery, and testing details.
+
 **NOTE**:
 In general, C++ does not have a standardized ABI. However, by following certain COM idioms, we provide portable C++ interfaces. This means you can use a pre-build version of the `aoo` shared library, even though it may have been built with a different compiler (version).
 

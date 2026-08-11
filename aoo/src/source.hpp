@@ -5,6 +5,7 @@
 #pragma once
 
 #include "aoo_source.hpp"
+#include "aoo_low_latency.h"
 #if AOO_NET
 # include "aoo_client.hpp"
 #endif
@@ -228,6 +229,10 @@ class Source final : public AooSource, rt_memory_pool_client {
 
     AooError AOO_CALL process(AooSample **data, AooInt32 n, AooNtpTime t) override;
 
+    AooError process_low_latency(AooSample **data, AooInt32 n,
+                                 AooNtpTime source_timestamp,
+                                 AooUInt64 absolute_sample_position);
+
     AooError AOO_CALL setEventHandler(AooEventHandler fn, void *user, AooEventMode mode) override;
 
     AooBool AOO_CALL eventsAvailable() override;
@@ -327,10 +332,13 @@ class Source final : public AooSource, rt_memory_pool_client {
     aoo::vector<AooByte> sendbuffer_;
     dynamic_resampler resampler_;
     struct block_data {
-        static constexpr size_t header_size = 8;
         double sr;
+        uint64_t absolute_sample_position;
+        uint64_t source_timestamp;
         AooSample data[1];
+        static constexpr size_t header_size = sizeof(double) + 2 * sizeof(uint64_t);
     };
+    static_assert(block_data::header_size == offsetof(block_data, data));
     aoo::spsc_queue<char> audio_queue_;
     history_buffer history_;
     using message_queue = lockfree::unbounded_mpsc_queue<rt_stream_message, aoo::rt_allocator<rt_stream_message>>;
@@ -364,6 +372,12 @@ class Source final : public AooSource, rt_memory_pool_client {
     parameter<bool> dynamic_resampling_{ AOO_DYNAMIC_RESAMPLING };
     parameter<bool> binary_{ AOO_BINARY_FORMAT };
     parameter<char> resample_method_{ AOO_RESAMPLE_MODE };
+    AooLowLatencyStreamConfiguration low_latency_configuration_{};
+    bool low_latency_enabled_ = false;
+    uint64_t absolute_sample_position_ = 0;
+    uint64_t next_input_sample_position_ = 0;
+    aoo::time_tag next_input_timestamp_;
+    bool has_input_timing_ = false;
 
     // helper methods
     static void free_metadata(stream_state_type state);

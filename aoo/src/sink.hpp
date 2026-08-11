@@ -5,6 +5,7 @@
 #pragma once
 
 #include "aoo_sink.hpp"
+#include "aoo_low_latency.h"
 #if AOO_NET
 # include "aoo_client.hpp"
 #endif
@@ -254,6 +255,10 @@ private:
     int32_t source_codec_delay_ = 0;
     int32_t sink_codec_delay_ = 0;
     int32_t buffer_latency_ = 0;
+    AooLowLatencyStreamConfiguration low_latency_configuration_{};
+    bool low_latency_enabled_ = false;
+    std::atomic<uint64_t> last_absolute_sample_position_{0};
+    int32_t consecutive_missing_blocks_ = 0;
 
     std::atomic<source_state> state_{source_state::idle};
     rt_metadata_ptr metadata_;
@@ -269,6 +274,11 @@ private:
     // statistics
     std::atomic<int32_t> dropped_blocks_{0};
     time_tag last_ping_reply_time_;
+    static constexpr int32_t round_trip_capacity_ = 128;
+    std::array<double, round_trip_capacity_> round_trip_samples_{};
+    int32_t round_trip_write_index_ = 0;
+    int32_t round_trip_count_ = 0;
+    std::atomic<double> round_trip_p95_{0};
     // audio decoder
     std::unique_ptr<AooFormat, format_deleter> format_;
     std::unique_ptr<AooCodec, decoder_deleter> decoder_;
@@ -344,6 +354,17 @@ public:
 
     AooError AOO_CALL codecControl(const AooChar *codec, AooCtl ctl,
             AooIntPtr index, void *data, AooSize size) override;
+
+    void observe_low_latency_arrival(const net_packet& packet);
+    AooError get_low_latency_statistics(
+        AooLowLatencySinkStatistics& statistics
+    ) const;
+    void set_low_latency_target(AooUInt32 frames) {
+        low_latency_target_frames_.store(frames, std::memory_order_release);
+    }
+    AooUInt32 low_latency_target() const {
+        return low_latency_target_frames_.load(std::memory_order_acquire);
+    }
 
     // getters
     AooId id() const { return id_.load(); }
@@ -423,6 +444,13 @@ private:
     parameter<bool> dynamic_resampling_{ AOO_DYNAMIC_RESAMPLING };
     parameter<bool> binary_{ AOO_BINARY_FORMAT };
     parameter<char> resample_method_{ AOO_RESAMPLE_MODE };
+    static constexpr uint64_t low_latency_arrival_capacity_ = 4096;
+    std::array<std::atomic<int64_t>, low_latency_arrival_capacity_>
+        low_latency_arrivals_{};
+    std::atomic<uint64_t> low_latency_arrival_write_index_{0};
+    std::atomic<uint64_t> low_latency_arrival_count_{0};
+    int32_t low_latency_arrival_stream_id_ = kAooIdInvalid;
+    std::atomic<AooUInt32> low_latency_target_frames_{0};
 
     // events
     using event_queue = lockfree::unbounded_mpsc_queue<event_ptr, aoo::rt_allocator<event_ptr>>;

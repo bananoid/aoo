@@ -220,7 +220,8 @@ enum
     kAooBinMsgDataFrames = 0x02,
     kAooBinMsgDataStreamMessage = 0x04,
     kAooBinMsgDataXRun = 0x08,
-    kAooBinMsgDataTimeStamp = 0x10
+    kAooBinMsgDataTimeStamp = 0x10,
+    kAooBinMsgDataLowLatency = 0x20
 };
 
 /** \brief commands for 'message' binary message */

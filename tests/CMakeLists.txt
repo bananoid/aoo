@@ -20,6 +20,10 @@ target_link_libraries(test_c_interface PRIVATE ${test_libs})
 add_executable(test_rt_memory_pool "test_rt_memory_pool.cpp")
 target_link_libraries(test_rt_memory_pool PRIVATE ${test_libs})
 
+add_executable(test_low_latency "test_low_latency.cpp")
+target_link_libraries(test_low_latency PRIVATE ${test_libs})
+add_test(NAME low_latency_protocol COMMAND test_low_latency)
+
 # relay test
 if (BUILD_SHARED_LIBS)
     message(STATUS "skip 'test_relay' because it requires a static AOO library")

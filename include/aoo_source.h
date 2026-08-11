@@ -187,7 +187,7 @@ AOO_INLINE AooError AooSource_getDynamicResampling(AooSource *source, AooBool *b
 }
 
 /** \copydoc AooSource::getRealSampleRate() */
-AOO_INLINE AooError AooSource_getRealSampleRate(AooSource *source, AooSample *sr)
+AOO_INLINE AooError AooSource_getRealSampleRate(AooSource *source, AooSampleRate *sr)
 {
     return AooSource_control(source, kAooCtlGetRealSampleRate, 0, AOO_ARG(*sr));
 }

@@ -4,6 +4,8 @@
 
 #include "sink.hpp"
 
+#include "codec/aoo_pcm.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -46,7 +48,8 @@ const int32_t kDataHeaderSize = kDataMaxAddrSize + 8;
 
 // binary data message:
 // args: 8 bytes (stream ID + count)
-const int32_t kBinDataHeaderSize = kAooBinMsgLargeHeaderSize + 8;
+const int32_t kBinDataHeaderSize = kAooBinMsgLargeHeaderSize
+    + 8 + AOO_LOW_LATENCY_PACKET_HEADER_SIZE;
 
 } // aoo
 
@@ -340,7 +343,7 @@ AooError AOO_CALL aoo::Sink::control(
         break;
     }
     case kAooCtlGetResendLimit:
-        CHECKARG(AooSeconds);
+        CHECKARG(int32_t);
         as<int32_t>(ptr) = resend_limit_.load();
         break;
     // source timeout
@@ -513,6 +516,108 @@ AOO_API AooError AOO_CALL AooSink_process(
         AooSink *sink, AooSample **data, AooInt32 nsamples, AooNtpTime t,
         AooStreamMessageHandler messageHandler, void *user) {
     return sink->process(data, nsamples, t, messageHandler, user);
+}
+
+AOO_API AooError AOO_CALL AooSink_getLowLatencyStatistics(
+        AooSink *sink, AooLowLatencySinkStatistics *statistics) {
+    if (!sink || !statistics) {
+        return kAooErrorBadArgument;
+    }
+    return static_cast<aoo::Sink *>(sink)->get_low_latency_statistics(
+        *statistics
+    );
+}
+
+AOO_API AooError AOO_CALL AooSink_setLowLatencyTarget(
+        AooSink *sink, AooUInt32 target_latency_frames) {
+    if (!sink || target_latency_frames == 0) {
+        return kAooErrorBadArgument;
+    }
+    static_cast<aoo::Sink *>(sink)->set_low_latency_target(
+        target_latency_frames
+    );
+    return kAooOk;
+}
+
+void aoo::Sink::observe_low_latency_arrival(const net_packet& packet) {
+    if (!(packet.flags & kAooBinMsgDataLowLatency)
+        || packet.frame_index != 0 || packet.source_timestamp == 0) {
+        return;
+    }
+    if (packet.stream_id != low_latency_arrival_stream_id_) {
+        low_latency_arrival_stream_id_ = packet.stream_id;
+        low_latency_arrival_write_index_.store(0, std::memory_order_release);
+        low_latency_arrival_count_.store(0, std::memory_order_release);
+    }
+    const double transit = time_tag::duration(
+        time_tag(packet.source_timestamp),
+        time_tag::now()
+    );
+    if (!std::isfinite(transit)) {
+        return;
+    }
+    const auto nanoseconds = static_cast<int64_t>(std::clamp(
+        transit * 1.0e9,
+        static_cast<double>(INT64_MIN),
+        static_cast<double>(INT64_MAX)
+    ));
+    const uint64_t writeIndex = low_latency_arrival_write_index_.load(
+        std::memory_order_relaxed
+    );
+    low_latency_arrivals_[writeIndex % low_latency_arrival_capacity_].store(
+        nanoseconds,
+        std::memory_order_relaxed
+    );
+    low_latency_arrival_write_index_.store(
+        writeIndex + 1,
+        std::memory_order_release
+    );
+    low_latency_arrival_count_.store(
+        std::min(writeIndex + 1, low_latency_arrival_capacity_),
+        std::memory_order_release
+    );
+}
+
+AooError aoo::Sink::get_low_latency_statistics(
+        AooLowLatencySinkStatistics& statistics) const {
+    statistics = {};
+    const uint64_t writeIndex = low_latency_arrival_write_index_.load(
+        std::memory_order_acquire
+    );
+    const uint64_t count = std::min(
+        low_latency_arrival_count_.load(std::memory_order_acquire),
+        low_latency_arrival_capacity_
+    );
+    statistics.arrivalObservationCount = writeIndex;
+    if (count == 0 || writeIndex == 0) {
+        return kAooOk;
+    }
+    std::array<int64_t, low_latency_arrival_capacity_> values{};
+    const uint64_t first = writeIndex - count;
+    for (uint64_t index = 0; index < count; ++index) {
+        values[index] = low_latency_arrivals_[
+            (first + index) % low_latency_arrival_capacity_
+        ].load(std::memory_order_relaxed);
+    }
+    const int64_t baseline = *std::min_element(
+        values.begin(),
+        values.begin() + count
+    );
+    const int64_t latest = values[count - 1];
+    const uint64_t percentileIndex = static_cast<uint64_t>(
+        std::ceil(0.99 * static_cast<double>(count - 1))
+    );
+    std::nth_element(
+        values.begin(),
+        values.begin() + percentileIndex,
+        values.begin() + count
+    );
+    const int64_t p99 = values[percentileIndex];
+    statistics.latestArrivalResidual = std::max<int64_t>(0, latest - baseline)
+        * 1.0e-9;
+    statistics.p99ArrivalResidual = std::max<int64_t>(0, p99 - baseline)
+        * 1.0e-9;
+    return kAooOk;
 }
 
 AooError AOO_CALL aoo::Sink::process(
@@ -1017,7 +1122,7 @@ AooError Sink::handle_data_message(const osc::ReceivedMessage& msg,
 // binary data message:
 // stream_id (int32), seq (int32), channel (uint8), flags (uint8), size (uint16)
 // [total (int32), nframes (int16), frame (int16)], [msgsize (int32)], [sr (float64)],
-// [tt (uint64)], data...
+// [tt (uint64)], [versioned low-latency packet header], data...
 
 AooError Sink::handle_data_message(const AooByte *msg, int32_t n,
                                    AooId id, const ip_address& addr)
@@ -1065,9 +1170,52 @@ AooError Sink::handle_data_message(const AooByte *msg, int32_t n,
         d.samplerate = 0;
     }
     if (d.flags & kAooBinMsgDataTimeStamp) {
+        if ((end - it) < 8) {
+            goto wrong_size;
+        }
         d.tt = aoo::read_bytes<uint64_t>(it);
     } else {
         d.tt = 0;
+    }
+    if (d.flags & kAooBinMsgDataLowLatency) {
+        if ((end - it) < AOO_LOW_LATENCY_PACKET_HEADER_SIZE) {
+            goto wrong_size;
+        }
+        AooLowLatencyPacketHeader header{};
+        auto result = aoo_lowLatencyPacketHeaderDecode(
+            it,
+            static_cast<AooSize>(end - it),
+            &header
+        );
+        if (result != kAooOk
+            || header.streamId != static_cast<uint64_t>(
+                static_cast<uint32_t>(d.stream_id)
+            )
+            || header.sequence != static_cast<uint32_t>(d.sequence)
+            || header.fragmentIndex != d.frame_index
+            || header.fragmentCount != d.num_frames
+            || header.payloadBytes != static_cast<uint32_t>(d.size)) {
+            LOG_ERROR("AooSink: invalid low-latency packet header "
+                      << "(decode=" << result
+                      << ", stream=" << header.streamId << "/"
+                      << static_cast<uint32_t>(d.stream_id)
+                      << ", sequence=" << header.sequence << "/"
+                      << static_cast<uint32_t>(d.sequence)
+                      << ", fragment=" << header.fragmentIndex << "/"
+                      << d.frame_index << " of " << header.fragmentCount << "/"
+                      << d.num_frames
+                      << ", payload=" << header.payloadBytes << "/" << d.size
+                      << ")");
+            goto wrong_size;
+        }
+        d.protocol_version = header.protocolVersion;
+        d.transport_profile = header.profile;
+        d.pcm_format = header.pcmFormat;
+        d.absolute_sample_position = header.absoluteSamplePosition;
+        d.source_timestamp = header.sourceTimestamp;
+        d.block_frames = header.blockFrames;
+        d.channel_count = header.channelCount;
+        it += AOO_LOW_LATENCY_PACKET_HEADER_SIZE;
     }
     d.data = it;
 
@@ -1098,7 +1246,11 @@ AooError Sink::handle_data_packet(net_packet& d, bool binary,
     if (!src){
         src = add_source(addr, id);
     }
-    return src->handle_data(*this, d, binary);
+    const auto result = src->handle_data(*this, d, binary);
+    if (result == kAooOk) {
+        observe_low_latency_arrival(d);
+    }
+    return result;
 }
 
 AooError Sink::handle_ping_message(const osc::ReceivedMessage& msg,
@@ -1229,7 +1381,19 @@ void source_desc::update(const Sink& s){
         assert(decoder_ != nullptr);
         // calculate latency
         auto convert = (double)format_->sampleRate / (double)format_->blockSize;
-        auto latency = s.latency();
+        auto latency = low_latency_enabled_
+            ? static_cast<double>(
+                s.low_latency_target() > 0
+                    ? s.low_latency_target()
+                    : low_latency_configuration_.targetLatencyFrames
+              ) / low_latency_configuration_.sampleRate
+            : s.latency();
+        if (low_latency_enabled_) {
+            low_latency_configuration_.targetLatencyFrames =
+                s.low_latency_target() > 0
+                    ? s.low_latency_target()
+                    : low_latency_configuration_.targetLatencyFrames;
+        }
         int32_t latency_blocks = std::ceil(latency * convert);
         // minimum buffer size depends on resampling and reblocking!
         auto resample = (double)s.samplerate() / (double)format_->sampleRate;
@@ -1372,13 +1536,31 @@ AooError source_desc::handle_start(const Sink& s, int32_t stream_id, int32_t seq
         return kAooErrorNone;
     }
 
+    AooLowLatencyStreamConfiguration low_latency_configuration{};
+    bool low_latency_enabled = false;
+    if (md && md->type == kAooDataBinary && md->data && md->size > 0) {
+        const bool has_low_latency_magic = md->size >= 4
+            && md->data[0] == 'A' && md->data[1] == 'O'
+            && md->data[2] == 'L' && md->data[3] == 'S';
+        auto result = aoo_lowLatencyStreamConfigurationDecode(
+            md->data,
+            md->size,
+            &low_latency_configuration
+        );
+        if (result == kAooOk) {
+            low_latency_enabled = true;
+        } else if (has_low_latency_magic) {
+            LOG_ERROR("AooSink: incompatible low-latency stream configuration");
+            return kAooErrorBadFormat;
+        }
+    }
+
     // check if format has changed
     // NOTE: format_id_ is only used in this method, so we don't need a lock!
     const AooCodecInterface *codec = nullptr;
     AooFormatStorage fmt;
     bool format_changed = format_id != format_id_;
-    format_id_ = format_id;
-    if (format_changed){
+    if (format_changed || low_latency_enabled){
         // look up codec
         codec = aoo::find_codec(f.codecName);
         if (!codec){
@@ -1398,6 +1580,23 @@ AooError source_desc::handle_start(const Sink& s, int32_t stream_id, int32_t seq
         }
     }
 
+    if (low_latency_enabled) {
+        const auto *pcm = reinterpret_cast<const AooFormatPcm *>(&fmt);
+        const AooPcmBitDepth expectedBitDepth =
+            low_latency_configuration.pcmFormat == kAooLowLatencyPcmFloat32
+                ? kAooPcmFloat32
+                : kAooPcmInt24;
+        if (strcmp(fmt.header.codecName, kAooCodecPcm)
+            || fmt.header.numChannels != low_latency_configuration.channelCount
+            || fmt.header.sampleRate != low_latency_configuration.sampleRate
+            || fmt.header.blockSize != low_latency_configuration.blockFrames
+            || pcm->bitDepth != expectedBitDepth) {
+            LOG_ERROR("AooSink: low-latency metadata does not match PCM format");
+            return kAooErrorBadFormat;
+        }
+    }
+    format_id_ = format_id;
+
     // copy metadata
     AooData *metadata = nullptr;
     if (md) {
@@ -1416,6 +1615,13 @@ AooError source_desc::handle_start(const Sink& s, int32_t stream_id, int32_t seq
     // so we have to set it while holding the lock!
     bool first_stream = stream_id_ == kAooIdInvalid;
     stream_id_ = stream_id;
+    low_latency_configuration_ = low_latency_configuration;
+    low_latency_enabled_ = low_latency_enabled;
+    last_absolute_sample_position_.store(0, std::memory_order_release);
+    consecutive_missing_blocks_ = 0;
+    round_trip_write_index_ = 0;
+    round_trip_count_ = 0;
+    round_trip_p95_.store(0, std::memory_order_release);
 
     if (format_changed){
         // create new decoder if necessary
@@ -1623,6 +1829,36 @@ AooError source_desc::handle_data(const Sink& s, net_packet& d, bool binary)
 #else
     assert(decoder_ != nullptr);
 #endif
+    if (low_latency_enabled_) {
+        if (!(d.flags & kAooBinMsgDataLowLatency)
+            || d.protocol_version != low_latency_configuration_.protocolVersion
+            || d.transport_profile != low_latency_configuration_.profile
+            || d.pcm_format != low_latency_configuration_.pcmFormat
+            || d.block_frames != low_latency_configuration_.blockFrames
+            || d.channel_count != low_latency_configuration_.channelCount) {
+            LOG_ERROR("AooSink: low-latency packet does not match negotiated stream "
+                      << "(flags=" << d.flags
+                      << ", version=" << d.protocol_version << "/"
+                      << low_latency_configuration_.protocolVersion
+                      << ", profile=" << static_cast<int>(d.transport_profile) << "/"
+                      << static_cast<int>(low_latency_configuration_.profile)
+                      << ", format=" << static_cast<int>(d.pcm_format) << "/"
+                      << static_cast<int>(low_latency_configuration_.pcmFormat)
+                      << ", block=" << d.block_frames << "/"
+                      << low_latency_configuration_.blockFrames
+                      << ", channels=" << d.channel_count << "/"
+                      << low_latency_configuration_.channelCount << ")");
+            return kAooErrorBadFormat;
+        }
+        if (d.absolute_sample_position + d.block_frames
+            <= last_absolute_sample_position_.load(std::memory_order_acquire)) {
+            LOG_VERBOSE("AooSink: discard stale low-latency packet");
+            return kAooOk;
+        }
+    } else if (d.flags & kAooBinMsgDataLowLatency) {
+        LOG_ERROR("AooSink: low-latency packet arrived without negotiation");
+        return kAooErrorBadFormat;
+    }
     // check and fix up samplerate
     if (d.samplerate == 0){
         assert(!(d.flags & kAooBinMsgDataSampleRate));
@@ -1689,6 +1925,25 @@ AooError source_desc::handle_pong(const Sink& s, time_tag tt1,
 #endif
 
     time_tag tt4 = aoo::time_tag::now(); // local receive time
+
+    const double roundTrip = time_tag::duration(tt1, tt4)
+        - time_tag::duration(tt2, tt3);
+    if (std::isfinite(roundTrip) && roundTrip >= 0) {
+        round_trip_samples_[round_trip_write_index_] = roundTrip;
+        round_trip_write_index_ = (
+            round_trip_write_index_ + 1
+        ) % round_trip_capacity_;
+        round_trip_count_ = std::min(
+            round_trip_count_ + 1,
+            round_trip_capacity_
+        );
+        auto sorted = round_trip_samples_;
+        std::sort(sorted.begin(), sorted.begin() + round_trip_count_);
+        const int32_t p95Index = static_cast<int32_t>(std::ceil(
+            0.95 * static_cast<double>(round_trip_count_ - 1)
+        ));
+        round_trip_p95_.store(sorted[p95Index], std::memory_order_release);
+    }
 
     // send ping event
     auto e = make_event<source_ping_event>(ep, tt1, tt2, tt3, tt4);
@@ -2136,6 +2391,12 @@ bool source_desc::add_packet(const Sink& s, const net_packet& d,
         LOG_DEBUG("AooSink: ignore data packet from previous stream");
         return false;
     }
+    if (low_latency_enabled_
+        && d.absolute_sample_position + d.block_frames
+            <= last_absolute_sample_position_.load(std::memory_order_acquire)) {
+        LOG_VERBOSE("AooSink: discard expired low-latency block");
+        return false;
+    }
 
     if (d.sequence <= jitter_buffer_.last_popped()) {
         // try to detect wrap around
@@ -2265,6 +2526,39 @@ bool source_desc::add_packet(const Sink& s, const net_packet& d,
 // stream messages into the priority queue and advances the stream time.
 // This method also handles buffering.
 bool source_desc::try_decode_block(const Sink& s, AooSample* buffer, stream_stats& stats){
+    if (low_latency_enabled_) {
+        const AooUInt32 requestedTarget = s.low_latency_target();
+        if (requestedTarget > 0
+            && requestedTarget
+                != low_latency_configuration_.targetLatencyFrames) {
+            const int32_t previousLatencyBlocks = latency_blocks_;
+            low_latency_configuration_.targetLatencyFrames = requestedTarget;
+            latency_blocks_ = std::max<int32_t>(
+                1,
+                static_cast<int32_t>(std::ceil(
+                    static_cast<double>(requestedTarget)
+                        / format_->blockSize
+                ))
+            );
+            latency_samples_ = std::max<int32_t>(
+                1,
+                static_cast<int32_t>(std::llround(
+                    static_cast<double>(requestedTarget)
+                        / format_->sampleRate * s.samplerate()
+                ))
+            );
+            if (latency_blocks_ > previousLatencyBlocks
+                && stream_state_ == stream_state::active) {
+                stream_state_ = stream_state::buffering;
+                auto buffering = make_event<stream_state_event>(
+                    ep,
+                    kAooStreamStateBuffering,
+                    0
+                );
+                queue_event(std::move(buffering));
+            }
+        }
+    }
     // first handle buffering.
     if (stream_state_ == stream_state::buffering) {
         // if stopped during buffering, just fake a buffer underrun.
@@ -2275,14 +2569,28 @@ bool source_desc::try_decode_block(const Sink& s, AooSample* buffer, stream_stat
         // (We take either the process samples or stream samples, depending on
         // which has the smaller granularity)
         auto elapsed = std::min<int32_t>(process_samples_, stream_samples_ + 0.5);
+        int32_t complete_blocks = 0;
+        if (low_latency_enabled_) {
+            for (const auto& block : jitter_buffer_) {
+                if (!block.complete()) {
+                    break;
+                }
+                complete_blocks++;
+            }
+        }
+        const bool needs_complete_low_latency_depth = low_latency_enabled_
+            && complete_blocks < latency_blocks_;
     #if BUFFER_METHOD == BUFFER_BLOCKS
-        if (jitterbuffer_.size() < latency_blocks_) {
+        if (jitter_buffer_.size() < latency_blocks_
+            || needs_complete_low_latency_depth) {
     #elif BUFFER_METHOD == BUFFER_SAMPLES
-        if (elapsed < latency_samples_) {
+        if (elapsed < latency_samples_ || needs_complete_low_latency_depth) {
     #elif BUFFER_METHOD == BUFFER_BLOCKS_OR_SAMPLES
-        if ((elapsed < latency_samples_) && (jitterbuffer_.size() < latency_blocks_)) {
+        if (((elapsed < latency_samples_) && (jitter_buffer_.size() < latency_blocks_))
+            || needs_complete_low_latency_depth) {
     #elif BUFFER_METHOD == BUFFER_BLOCKS_AND_SAMPLES
-        if ((elapsed < latency_samples_) || (jitter_buffer_.size() < latency_blocks_)) {
+        if ((elapsed < latency_samples_) || (jitter_buffer_.size() < latency_blocks_)
+            || needs_complete_low_latency_depth) {
     #else
         #error "unknown buffer method"
     #endif
@@ -2364,6 +2672,44 @@ bool source_desc::try_decode_block(const Sink& s, AooSample* buffer, stream_stat
     }
 
     if (jitter_buffer_.empty()) {
+        if (low_latency_enabled_ && stream_state_ == stream_state::active) {
+            const auto framesize = format_->blockSize;
+            const auto bufsize = framesize * format_->numChannels;
+            const auto resample = (double)s.samplerate() / (double)format_->sampleRate;
+            if (resampler_.bypass()) {
+                assert(buffer != nullptr);
+                std::fill(buffer, buffer + bufsize, 0);
+            } else {
+                assert(buffer == nullptr);
+                auto silence = (AooSample *)alloca(bufsize * sizeof(AooSample));
+                std::fill(silence, silence + bufsize, 0);
+                if (!resampler_.write(silence, framesize)) {
+                    return false;
+                }
+            }
+            stream_samples_ += (double)framesize * resample;
+            jitter_buffer_.advance_missing();
+            last_absolute_sample_position_.fetch_add(
+                framesize,
+                std::memory_order_acq_rel
+            );
+            stats.dropped++;
+            consecutive_missing_blocks_++;
+            if (consecutive_missing_blocks_ >= 4) {
+                consecutive_missing_blocks_ = 0;
+                jitter_buffer_.reset();
+                stream_state_ = stream_state::buffering;
+                auto underrun = make_event<source_event>(kAooEventBufferUnderrun, ep);
+                queue_event(std::move(underrun));
+                auto buffering = make_event<stream_state_event>(
+                    ep,
+                    kAooStreamStateBuffering,
+                    0
+                );
+                queue_event(std::move(buffering));
+            }
+            return true;
+        }
     #if 0
         LOG_DEBUG("AooSink: jitter buffer empty");
     #endif
@@ -2377,7 +2723,8 @@ bool source_desc::try_decode_block(const Sink& s, AooSample* buffer, stream_stat
     double sr;
 
     auto& b = jitter_buffer_.front();
-    if (b.complete()){
+    const bool block_complete = b.complete();
+    if (block_complete){
         // block is ready
         if (b.flags & kAooBinMsgDataXRun) {
             stats.xrun++;
@@ -2507,6 +2854,49 @@ bool source_desc::try_decode_block(const Sink& s, AooSample* buffer, stream_stat
 
     stream_samples_ += (double)framesize * resample;
 
+    if (low_latency_enabled_) {
+        if (block_complete) {
+            consecutive_missing_blocks_ = 0;
+            const auto blockEnd = b.absolute_sample_position
+                + std::max<uint64_t>(
+                    b.block_frames,
+                    static_cast<uint64_t>(framesize)
+                );
+            auto current = last_absolute_sample_position_.load(
+                std::memory_order_relaxed
+            );
+            while (current < blockEnd
+                   && !last_absolute_sample_position_.compare_exchange_weak(
+                       current,
+                       blockEnd,
+                       std::memory_order_release,
+                       std::memory_order_relaxed
+                   )) {}
+        } else {
+            last_absolute_sample_position_.fetch_add(
+                framesize,
+                std::memory_order_acq_rel
+            );
+            consecutive_missing_blocks_++;
+            if (consecutive_missing_blocks_ >= 4) {
+                consecutive_missing_blocks_ = 0;
+                jitter_buffer_.reset();
+                stream_state_ = stream_state::buffering;
+                auto underrun = make_event<source_event>(
+                    kAooEventBufferUnderrun,
+                    ep
+                );
+                queue_event(std::move(underrun));
+                auto buffering = make_event<stream_state_event>(
+                    ep,
+                    kAooStreamStateBuffering,
+                    0
+                );
+                queue_event(std::move(buffering));
+            }
+        }
+    }
+
     jitter_buffer_.pop();
 
     return true;
@@ -2516,6 +2906,11 @@ bool source_desc::try_decode_block(const Sink& s, AooSample* buffer, stream_stat
 
 // deal with "holes" in block queue
 void source_desc::check_missing_blocks(const Sink& s){
+    if (low_latency_enabled_
+        && low_latency_configuration_.profile
+            == kAooLowLatencyProfileDeterministicWired) {
+        return;
+    }
     // only check if it has more than a single pending block!
     if (jitter_buffer_.size() <= 1 || !s.resend_enabled()){
         return;
@@ -2527,7 +2922,23 @@ void source_desc::check_missing_blocks(const Sink& s){
 
     // resend incomplete blocks except for the last block
     auto n = jitter_buffer_.size() - 1;
-    for (auto b = jitter_buffer_.begin(); n--; ++b){
+    int32_t blockOffset = 0;
+    for (auto b = jitter_buffer_.begin(); n--; ++b, ++blockOffset){
+        if (low_latency_enabled_
+            && low_latency_configuration_.profile
+                == kAooLowLatencyProfileAdaptiveWireless) {
+            const double blockDuration = static_cast<double>(
+                low_latency_configuration_.blockFrames
+            ) / low_latency_configuration_.sampleRate;
+            const double roundTripP95 = round_trip_p95_.load(
+                std::memory_order_acquire
+            );
+            const double timeUntilDeadline = (blockOffset + 1) * blockDuration;
+            if (roundTripP95 <= 0
+                || timeUntilDeadline <= roundTripP95 + 2 * blockDuration) {
+                continue;
+            }
+        }
         if (!b->complete() && b->update(elapsed, interval)) {
             if (b->received_frames > 0) {
                 // a) only some frames missing
