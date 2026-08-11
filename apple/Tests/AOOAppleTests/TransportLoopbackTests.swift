@@ -195,6 +195,46 @@ struct TransportLoopbackTests {
         #expect(status.lastErrorCode != 0)
     }
 
+    @Test func activeReceiverCanBeDestroyedWithoutStoppingTheSender() throws {
+        for iteration in 0..<16 {
+            let port = testPort(offset: 20 + iteration)
+            var receiverConfiguration = AOOStreamConfiguration
+                .automaticReceiver(channelCapacity: 2)
+            receiverConfiguration.maximumCallbackFrames = 64
+            var receiver: AOOReceiver? = try AOOReceiver(
+                localPort: port,
+                configuration: receiverConfiguration,
+                fixedCallbackSize: true
+            )
+            receiver?.setMonitorPair(startingAtOneBased: 1)
+
+            var senderConfiguration = AOOStreamConfiguration
+                .deterministicWired(channelCount: 2)
+            senderConfiguration.maximumCallbackFrames = 64
+            let sender = try AOOSender(configuration: senderConfiguration)
+            try sender.apply(AOOPeerConfiguration(
+                isEnabled: true,
+                host: "127.0.0.1",
+                receiverPort: port
+            ))
+
+            let peak = pump(
+                sender: sender,
+                receiver: receiver!,
+                sourceChannelCount: 2,
+                sourceLeftChannel: 0,
+                sourceRightChannel: 1,
+                frameCount: 64,
+                iterations: 900
+            )
+            #expect(peak > 0.05)
+            #expect(waitUntil { receiver?.status.streamActive == true })
+
+            receiver = nil
+            Thread.sleep(forTimeInterval: 0.002)
+        }
+    }
+
     private func pump(
         sender: AOOSender,
         receiver: AOOReceiver,

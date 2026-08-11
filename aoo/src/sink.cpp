@@ -2314,7 +2314,9 @@ void source_desc::on_underrun(const Sink &s) {
 void source_desc::handle_underrun(const Sink& s){
     LOG_VERBOSE("AooSink: jitter buffer underrun!");
 
-    if (!jitter_buffer_.empty()) {
+    // Low-latency playout may retain future blocks when the expected block is
+    // missing. Resetting them here is intentional during underrun recovery.
+    if (!low_latency_enabled_ && !jitter_buffer_.empty()) {
         LOG_ERROR("AooSink: bug: jitter buffer not empty");
     }
     // always reset buffer! otherwise add_packet() might try to fill
