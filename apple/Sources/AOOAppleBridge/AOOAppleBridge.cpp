@@ -22,6 +22,11 @@
 #include <vector>
 
 #if defined(__APPLE__)
+#include <AudioToolbox/AudioWorkInterval.h>
+#include <mach/mach_time.h>
+#include <os/clock.h>
+#include <os/object.h>
+#include <os/workgroup.h>
 #include <pthread.h>
 #endif
 
@@ -65,11 +70,114 @@ void configureNetworkThread() {
 #endif
 }
 
+void configureRealtimeNetworkThread() {
+#if defined(__APPLE__)
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
+}
+
 void configureSenderProcessThread() {
 #if defined(__APPLE__)
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
 #endif
 }
+
+#if defined(__APPLE__)
+class SenderAudioWorkInterval {
+public:
+    SenderAudioWorkInterval() = default;
+
+    void initialize(double blockDurationSeconds) {
+        mach_timebase_info(&timebase_);
+        blockPeriod_ = secondsToTicks(blockDurationSeconds);
+        idlePollPeriod_ = std::max<uint64_t>(1, blockPeriod_ / 8);
+        interval_ = AudioWorkIntervalCreate(
+            "AOO sender",
+            OS_CLOCK_MACH_ABSOLUTE_TIME,
+            nullptr
+        );
+    }
+
+    ~SenderAudioWorkInterval() {
+        if (interval_) {
+            os_release(interval_);
+        }
+    }
+
+    SenderAudioWorkInterval(const SenderAudioWorkInterval&) = delete;
+    SenderAudioWorkInterval& operator=(const SenderAudioWorkInterval&) = delete;
+
+    uint64_t now() const {
+        return mach_absolute_time();
+    }
+
+    uint64_t blockPeriod() const {
+        return blockPeriod_;
+    }
+
+    void join() {
+        if (interval_ && !joined_) {
+            joined_ = os_workgroup_join(interval_, &joinToken_) == 0;
+        }
+    }
+
+    void leave() {
+        finish();
+        if (joined_) {
+            os_workgroup_leave(interval_, &joinToken_);
+            joined_ = false;
+        }
+    }
+
+    void start(uint64_t startTime) {
+        if (!joined_ || intervalStarted_) {
+            return;
+        }
+        intervalStarted_ = os_workgroup_interval_start(
+            interval_,
+            startTime,
+            startTime + blockPeriod_,
+            nullptr
+        ) == 0;
+    }
+
+    void finish() {
+        if (!intervalStarted_) {
+            return;
+        }
+        const int result = os_workgroup_interval_finish(interval_, nullptr);
+        (void)result;
+        intervalStarted_ = false;
+    }
+
+    void sleepUntil(uint64_t deadline) const {
+        if (deadline > now()) {
+            mach_wait_until(deadline);
+        }
+    }
+
+    void idleSleep() const {
+        mach_wait_until(now() + idlePollPeriod_);
+    }
+
+private:
+    uint64_t secondsToTicks(double seconds) const {
+        const long double nanoseconds = seconds * 1.0e9L;
+        const long double ticks = nanoseconds
+            * static_cast<long double>(timebase_.denom)
+            / static_cast<long double>(timebase_.numer);
+        return std::max<uint64_t>(1, static_cast<uint64_t>(std::llround(ticks)));
+    }
+
+    mach_timebase_info_data_t timebase_{};
+    os_workgroup_interval_t interval_ = nullptr;
+    os_workgroup_join_token_s joinToken_{};
+    uint64_t blockPeriod_ = 1;
+    uint64_t idlePollPeriod_ = 1;
+    bool joined_ = false;
+    bool intervalStarted_ = false;
+};
+#endif
 
 int32_t clampedPort(int32_t port, int32_t fallback) {
     return port > 0 && port <= UINT16_MAX ? port : fallback;
@@ -288,6 +396,9 @@ struct AOOAppleSender {
     std::thread receiveThread;
     std::mutex destinationMutex;
     SenderMetrics metrics;
+#if defined(__APPLE__)
+    SenderAudioWorkInterval audioWorkInterval;
+#endif
 
     ~AOOAppleSender() {
         metrics.enabled.store(0, std::memory_order_release);
@@ -1007,7 +1118,7 @@ void startReceiverNetworkThreads(AOOAppleReceiver *receiver) {
         }
     });
     receiver->receiveThread = std::thread([receiver] {
-        configureNetworkThread();
+        configureRealtimeNetworkThread();
         const AooError result = AooClient_receive(receiver->client, kAooInfinite);
         if (result != kAooOk) {
             receiver->metrics.lastError.store(result, std::memory_order_relaxed);
@@ -1272,6 +1383,13 @@ AooError enqueueSenderProcessBlock(
     return result;
 }
 
+bool senderHasQueuedProcessBlock(const AOOAppleSender *sender) {
+    return sender->processReadIndex.load(std::memory_order_relaxed)
+            != sender->processWriteIndex.load(std::memory_order_acquire)
+        || sender->processGapReadIndex.load(std::memory_order_relaxed)
+            != sender->processGapWriteIndex.load(std::memory_order_acquire);
+}
+
 bool processNextSenderBlock(AOOAppleSender *sender) {
     const uint64_t readIndex = sender->processReadIndex.load(std::memory_order_relaxed);
     const uint64_t writeIndex = sender->processWriteIndex.load(std::memory_order_acquire);
@@ -1425,6 +1543,41 @@ void startSenderProcessThread(AOOAppleSender *sender) {
     sender->processThreadShouldRun.store(true, std::memory_order_release);
     sender->processThread = std::thread([sender] {
         configureSenderProcessThread();
+#if defined(__APPLE__)
+        auto& workInterval = sender->audioWorkInterval;
+        workInterval.join();
+        uint64_t nextDeadline = 0;
+        bool deadlineAnchored = false;
+        while (sender->processThreadShouldRun.load(std::memory_order_acquire)) {
+            if (!senderHasQueuedProcessBlock(sender)) {
+                const AooError result = AooClient_send(sender->client, 0);
+                if (result != kAooOk && result != kAooErrorWouldBlock) {
+                    sender->metrics.lastError.store(result, std::memory_order_relaxed);
+                }
+                const uint64_t now = workInterval.now();
+                if (deadlineAnchored && nextDeadline > now) {
+                    workInterval.sleepUntil(nextDeadline);
+                } else {
+                    workInterval.idleSleep();
+                }
+                continue;
+            }
+            const uint64_t cycleStart = workInterval.now();
+            workInterval.start(cycleStart);
+            const bool processedBlock = processNextSenderBlock(sender);
+            workInterval.finish();
+            if (!processedBlock) {
+                continue;
+            }
+            if (!deadlineAnchored) {
+                nextDeadline = cycleStart;
+                deadlineAnchored = true;
+            }
+            nextDeadline += workInterval.blockPeriod();
+            workInterval.sleepUntil(nextDeadline);
+        }
+        workInterval.leave();
+#else
         using clock = std::chrono::steady_clock;
         const auto blockDuration = std::chrono::duration<double>(
             static_cast<double>(sender->streamBlockSize) / sender->sampleRate
@@ -1462,6 +1615,7 @@ void startSenderProcessThread(AOOAppleSender *sender) {
                 std::this_thread::sleep_until(nextDeadline);
             }
         }
+#endif
     });
 }
 
@@ -1679,6 +1833,11 @@ AOOAppleSender *AOOAppleSenderCreate(
                 + channel * sender->streamBlockSize;
         }
     }
+#if defined(__APPLE__)
+    sender->audioWorkInterval.initialize(
+        static_cast<double>(sender->streamBlockSize) / sender->sampleRate
+    );
+#endif
 
     sender->source = AooSource_new(sourceID);
     sender->client = AooClient_new();

@@ -70,7 +70,11 @@ let package = Package(
             cSettings: bridgeCSettings,
             cxxSettings: bridgeCXXSettings,
             linkerSettings: [
-                .linkedLibrary("c++")
+                .linkedLibrary("c++"),
+                .linkedFramework(
+                    "AudioToolbox",
+                    .when(platforms: [.iOS, .macOS])
+                )
             ]
         ),
         .target(
