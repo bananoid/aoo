@@ -71,11 +71,17 @@ public struct AOOSenderStatus: Codable, Equatable, Sendable {
     public var processCallCount: UInt64
     public var processedFrameCount: UInt64
     public var processErrorCount: UInt64
+    public var processIdleCount: UInt64
+    public var processWouldBlockCount: UInt64
     public var handoffDropCount: UInt64
     public var resentFrameCount: UInt64
     public var pingEventCount: UInt64
+    public var inviteEventCount: UInt64
+    public var uninviteEventCount: UInt64
+    public var sinkRemoveEventCount: UInt64
     public var handoffLatencyMilliseconds: Double
     public var maximumHandoffLatencyMilliseconds: Double
+    public var maximumProcessIntervalMilliseconds: Double
     public var sourcePresentationLeadMilliseconds: Double
     public var roundTripMilliseconds: Double
     public var packetLoss: Double
@@ -98,11 +104,17 @@ public struct AOOSenderStatus: Codable, Equatable, Sendable {
         processCallCount: UInt64 = 0,
         processedFrameCount: UInt64 = 0,
         processErrorCount: UInt64 = 0,
+        processIdleCount: UInt64 = 0,
+        processWouldBlockCount: UInt64 = 0,
         handoffDropCount: UInt64 = 0,
         resentFrameCount: UInt64 = 0,
         pingEventCount: UInt64 = 0,
+        inviteEventCount: UInt64 = 0,
+        uninviteEventCount: UInt64 = 0,
+        sinkRemoveEventCount: UInt64 = 0,
         handoffLatencyMilliseconds: Double = 0,
         maximumHandoffLatencyMilliseconds: Double = 0,
+        maximumProcessIntervalMilliseconds: Double = 0,
         sourcePresentationLeadMilliseconds: Double = 0,
         roundTripMilliseconds: Double = 0,
         packetLoss: Double = 0,
@@ -124,11 +136,17 @@ public struct AOOSenderStatus: Codable, Equatable, Sendable {
         self.processCallCount = processCallCount
         self.processedFrameCount = processedFrameCount
         self.processErrorCount = processErrorCount
+        self.processIdleCount = processIdleCount
+        self.processWouldBlockCount = processWouldBlockCount
         self.handoffDropCount = handoffDropCount
         self.resentFrameCount = resentFrameCount
         self.pingEventCount = pingEventCount
+        self.inviteEventCount = inviteEventCount
+        self.uninviteEventCount = uninviteEventCount
+        self.sinkRemoveEventCount = sinkRemoveEventCount
         self.handoffLatencyMilliseconds = handoffLatencyMilliseconds
         self.maximumHandoffLatencyMilliseconds = maximumHandoffLatencyMilliseconds
+        self.maximumProcessIntervalMilliseconds = maximumProcessIntervalMilliseconds
         self.sourcePresentationLeadMilliseconds = sourcePresentationLeadMilliseconds
         self.roundTripMilliseconds = roundTripMilliseconds
         self.packetLoss = packetLoss
@@ -348,11 +366,17 @@ public final class AOOSender: @unchecked Sendable {
             processCallCount: raw.processCallCount,
             processedFrameCount: raw.processedFrameCount,
             processErrorCount: raw.processErrorCount,
+            processIdleCount: raw.processIdleCount,
+            processWouldBlockCount: raw.processWouldBlockCount,
             handoffDropCount: raw.handoffDropCount,
             resentFrameCount: raw.resentFrameCount,
             pingEventCount: raw.pingEventCount,
+            inviteEventCount: raw.inviteEventCount,
+            uninviteEventCount: raw.uninviteEventCount,
+            sinkRemoveEventCount: raw.sinkRemoveEventCount,
             handoffLatencyMilliseconds: raw.handoffLatencyMilliseconds,
             maximumHandoffLatencyMilliseconds: raw.maximumHandoffLatencyMilliseconds,
+            maximumProcessIntervalMilliseconds: raw.maximumProcessIntervalMilliseconds,
             sourcePresentationLeadMilliseconds: raw.sourcePresentationLeadMilliseconds,
             roundTripMilliseconds: raw.roundTripMilliseconds,
             packetLoss: raw.packetLoss,

@@ -280,11 +280,18 @@ struct SenderMetrics {
     std::atomic<uint64_t> processCalls{0};
     std::atomic<uint64_t> processedFrames{0};
     std::atomic<uint64_t> processErrors{0};
+    std::atomic<uint64_t> processIdle{0};
+    std::atomic<uint64_t> processWouldBlock{0};
     std::atomic<uint64_t> handoffDrops{0};
     std::atomic<uint64_t> resentFrames{0};
     std::atomic<uint64_t> pingEvents{0};
+    std::atomic<uint64_t> inviteEvents{0};
+    std::atomic<uint64_t> uninviteEvents{0};
+    std::atomic<uint64_t> sinkRemoveEvents{0};
+    std::atomic<int64_t> lastProcessNanoseconds{0};
     std::atomic<double> handoffLatencyMilliseconds{0};
     std::atomic<double> maximumHandoffLatencyMilliseconds{0};
+    std::atomic<double> maximumProcessIntervalMilliseconds{0};
     std::atomic<double> sourcePresentationLeadMilliseconds{0};
     std::atomic<double> roundTripMilliseconds{0};
     std::atomic<double> packetLoss{0};
@@ -798,6 +805,7 @@ void AOO_CALL handleSenderEvent(
     }
     switch (event->type) {
     case kAooEventInvite:
+        sender->metrics.inviteEvents.fetch_add(1, std::memory_order_relaxed);
         AooSource_handleInvite(
             sender->source,
             &event->invite.endpoint,
@@ -806,6 +814,7 @@ void AOO_CALL handleSenderEvent(
         );
         break;
     case kAooEventUninvite:
+        sender->metrics.uninviteEvents.fetch_add(1, std::memory_order_relaxed);
         AooSource_handleUninvite(
             sender->source,
             &event->uninvite.endpoint,
@@ -833,6 +842,7 @@ void AOO_CALL handleSenderEvent(
         break;
     }
     case kAooEventSinkRemove:
+        sender->metrics.sinkRemoveEvents.fetch_add(1, std::memory_order_relaxed);
         sender->metrics.peerResponsive.store(0, std::memory_order_release);
         sender->metrics.lastPeerPingNanoseconds.store(0, std::memory_order_relaxed);
         break;
@@ -1488,6 +1498,21 @@ bool processNextSenderBlock(AOOAppleSender *sender) {
                 );
             }
         }
+        const int64_t processNanoseconds = monotonicNanoseconds();
+        const int64_t previousProcessNanoseconds =
+            sender->metrics.lastProcessNanoseconds.exchange(
+                processNanoseconds,
+                std::memory_order_relaxed
+            );
+        if (previousProcessNanoseconds > 0
+            && processNanoseconds >= previousProcessNanoseconds) {
+            accumulateMaximum(
+                sender->metrics.maximumProcessIntervalMilliseconds,
+                static_cast<double>(
+                    processNanoseconds - previousProcessNanoseconds
+                ) * 1.0e-6
+            );
+        }
         const AooError result = AooSource_processLowLatency(
             sender->source,
             channels,
@@ -1510,7 +1535,14 @@ bool processNextSenderBlock(AOOAppleSender *sender) {
             static_cast<uint64_t>(sender->streamBlockSize),
             std::memory_order_relaxed
         );
-        if (result != kAooOk && result != kAooErrorIdle && result != kAooErrorWouldBlock) {
+        if (result == kAooErrorIdle) {
+            sender->metrics.processIdle.fetch_add(1, std::memory_order_relaxed);
+        } else if (result == kAooErrorWouldBlock) {
+            sender->metrics.processWouldBlock.fetch_add(
+                1,
+                std::memory_order_relaxed
+            );
+        } else if (result != kAooOk) {
             sender->metrics.processErrors.fetch_add(1, std::memory_order_relaxed);
             sender->metrics.lastError.store(result, std::memory_order_relaxed);
         }
@@ -2164,11 +2196,24 @@ void AOOAppleSenderGetStatus(
     status->processCallCount = sender->metrics.processCalls.load(std::memory_order_relaxed);
     status->processedFrameCount = sender->metrics.processedFrames.load(std::memory_order_relaxed);
     status->processErrorCount = sender->metrics.processErrors.load(std::memory_order_relaxed);
+    status->processIdleCount = sender->metrics.processIdle.load(std::memory_order_relaxed);
+    status->processWouldBlockCount = sender->metrics.processWouldBlock.load(
+        std::memory_order_relaxed
+    );
     status->handoffDropCount = sender->metrics.handoffDrops.load(std::memory_order_relaxed);
     status->resentFrameCount = sender->metrics.resentFrames.load(std::memory_order_relaxed);
     status->pingEventCount = sender->metrics.pingEvents.load(std::memory_order_relaxed);
+    status->inviteEventCount = sender->metrics.inviteEvents.load(std::memory_order_relaxed);
+    status->uninviteEventCount = sender->metrics.uninviteEvents.load(std::memory_order_relaxed);
+    status->sinkRemoveEventCount = sender->metrics.sinkRemoveEvents.load(
+        std::memory_order_relaxed
+    );
     status->handoffLatencyMilliseconds = sender->metrics.handoffLatencyMilliseconds.load(std::memory_order_relaxed);
     status->maximumHandoffLatencyMilliseconds = sender->metrics.maximumHandoffLatencyMilliseconds.load(std::memory_order_relaxed);
+    status->maximumProcessIntervalMilliseconds =
+        sender->metrics.maximumProcessIntervalMilliseconds.load(
+            std::memory_order_relaxed
+        );
     status->sourcePresentationLeadMilliseconds = sender->metrics.sourcePresentationLeadMilliseconds.load(std::memory_order_relaxed);
     status->roundTripMilliseconds = sender->metrics.roundTripMilliseconds.load(std::memory_order_relaxed);
     status->packetLoss = sender->metrics.packetLoss.load(std::memory_order_relaxed);

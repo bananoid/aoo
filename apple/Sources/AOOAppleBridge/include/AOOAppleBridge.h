@@ -36,11 +36,17 @@ typedef struct AOOAppleSenderStatus {
     uint64_t processCallCount;
     uint64_t processedFrameCount;
     uint64_t processErrorCount;
+    uint64_t processIdleCount;
+    uint64_t processWouldBlockCount;
     uint64_t handoffDropCount;
     uint64_t resentFrameCount;
     uint64_t pingEventCount;
+    uint64_t inviteEventCount;
+    uint64_t uninviteEventCount;
+    uint64_t sinkRemoveEventCount;
     double handoffLatencyMilliseconds;
     double maximumHandoffLatencyMilliseconds;
+    double maximumProcessIntervalMilliseconds;
     double sourcePresentationLeadMilliseconds;
     double roundTripMilliseconds;
     double packetLoss;
