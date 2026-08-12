@@ -103,6 +103,9 @@ and reading rich status are non-realtime operations. Once configured:
 - sender and receiver audio callbacks perform bounded copies, arithmetic, and
   atomic publication only;
 - audio callbacks do not allocate, lock, sleep, perform DNS, or call Bonjour;
+- the sender worker paces blocks from their source audio timestamps, so its
+  packet cadence follows the hardware callback clock rather than the nominal
+  sample-rate constant;
 - packet I/O, event handling, adaptation, and status aggregation run outside
   the audio callback;
 - callbacks may use arbitrary host block sizes up to the configured maximum

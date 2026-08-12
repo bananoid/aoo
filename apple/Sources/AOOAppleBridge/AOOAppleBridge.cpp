@@ -115,6 +115,10 @@ public:
         return blockPeriod_;
     }
 
+    uint64_t ticksForSeconds(double seconds) const {
+        return secondsToTicks(seconds);
+    }
+
     void join() {
         if (interval_ && !joined_) {
             joined_ = os_workgroup_join(interval_, &joinToken_) == 0;
@@ -1396,11 +1400,56 @@ AooError enqueueSenderProcessBlock(
     return result;
 }
 
-bool senderHasQueuedProcessBlock(const AOOAppleSender *sender) {
-    return sender->processReadIndex.load(std::memory_order_relaxed)
-            != sender->processWriteIndex.load(std::memory_order_acquire)
-        || sender->processGapReadIndex.load(std::memory_order_relaxed)
-            != sender->processGapWriteIndex.load(std::memory_order_acquire);
+bool nextSenderProcessTiming(
+    const AOOAppleSender *sender,
+    AooNtpTime& sourceNtpTime,
+    uint64_t& generation
+) {
+    const uint64_t readIndex = sender->processReadIndex.load(
+        std::memory_order_relaxed
+    );
+    const uint64_t writeIndex = sender->processWriteIndex.load(
+        std::memory_order_acquire
+    );
+    const uint64_t gapReadIndex = sender->processGapReadIndex.load(
+        std::memory_order_relaxed
+    );
+    const uint64_t gapWriteIndex = sender->processGapWriteIndex.load(
+        std::memory_order_acquire
+    );
+    const bool hasBlock = readIndex != writeIndex;
+    const bool hasGap = gapReadIndex != gapWriteIndex;
+    if (!hasBlock && !hasGap) {
+        return false;
+    }
+
+    const SenderProcessBlock *block = hasBlock
+        ? &sender->processQueue[readIndex % sender->processQueue.size()]
+        : nullptr;
+    const SenderProcessGap *gap = hasGap
+        ? &sender->processGapQueue[gapReadIndex % sender->processGapQueue.size()]
+        : nullptr;
+    const bool useGap = gap
+        && (!block || gap->sourceSamplePosition < block->sourceSamplePosition);
+    sourceNtpTime = useGap ? gap->sourceNtpTime : block->sourceNtpTime;
+    generation = useGap ? gap->generation : block->generation;
+    return true;
+}
+
+double senderSourceInterval(
+    AooNtpTime previous,
+    AooNtpTime current,
+    double nominalInterval
+) {
+    if (previous == 0 || current == 0) {
+        return nominalInterval;
+    }
+    const double interval = aoo_ntpTimeDuration(previous, current);
+    return std::isfinite(interval)
+        && interval > 0
+        && interval <= nominalInterval * 8
+        ? interval
+        : nominalInterval;
 }
 
 bool processNextSenderBlock(AOOAppleSender *sender) {
@@ -1583,8 +1632,12 @@ void startSenderProcessThread(AOOAppleSender *sender) {
         workInterval.join();
         uint64_t nextDeadline = 0;
         bool deadlineAnchored = false;
+        AooNtpTime previousSourceNtpTime = 0;
+        uint64_t pacedGeneration = 0;
         while (sender->processThreadShouldRun.load(std::memory_order_acquire)) {
-            if (!senderHasQueuedProcessBlock(sender)) {
+            AooNtpTime sourceNtpTime = 0;
+            uint64_t generation = 0;
+            if (!nextSenderProcessTiming(sender, sourceNtpTime, generation)) {
                 const AooError result = AooClient_send(sender->client, 0);
                 if (result != kAooOk && result != kAooErrorWouldBlock) {
                     sender->metrics.lastError.store(result, std::memory_order_relaxed);
@@ -1597,6 +1650,26 @@ void startSenderProcessThread(AOOAppleSender *sender) {
                 }
                 continue;
             }
+            const uint64_t now = workInterval.now();
+            if (!deadlineAnchored || generation != pacedGeneration) {
+                nextDeadline = now;
+                deadlineAnchored = true;
+            } else {
+                const double nominalInterval = static_cast<double>(
+                    sender->streamBlockSize
+                ) / sender->sampleRate;
+                nextDeadline += workInterval.ticksForSeconds(
+                    senderSourceInterval(
+                        previousSourceNtpTime,
+                        sourceNtpTime,
+                        nominalInterval
+                    )
+                );
+                if (now > nextDeadline + workInterval.blockPeriod() * 4) {
+                    nextDeadline = now;
+                }
+            }
+            workInterval.sleepUntil(nextDeadline);
             const uint64_t cycleStart = workInterval.now();
             workInterval.start(cycleStart);
             const bool processedBlock = processNextSenderBlock(sender);
@@ -1604,12 +1677,8 @@ void startSenderProcessThread(AOOAppleSender *sender) {
             if (!processedBlock) {
                 continue;
             }
-            if (!deadlineAnchored) {
-                nextDeadline = cycleStart;
-                deadlineAnchored = true;
-            }
-            nextDeadline += workInterval.blockPeriod();
-            workInterval.sleepUntil(nextDeadline);
+            previousSourceNtpTime = sourceNtpTime;
+            pacedGeneration = generation;
         }
         workInterval.leave();
 #else
@@ -1625,9 +1694,12 @@ void startSenderProcessThread(AOOAppleSender *sender) {
         );
         auto nextDeadline = clock::time_point{};
         bool deadlineAnchored = false;
+        AooNtpTime previousSourceNtpTime = 0;
+        uint64_t pacedGeneration = 0;
         while (sender->processThreadShouldRun.load(std::memory_order_acquire)) {
-            const bool processedBlock = processNextSenderBlock(sender);
-            if (!processedBlock) {
+            AooNtpTime sourceNtpTime = 0;
+            uint64_t generation = 0;
+            if (!nextSenderProcessTiming(sender, sourceNtpTime, generation)) {
                 const AooError result = AooClient_send(sender->client, 0);
                 if (result != kAooOk && result != kAooErrorWouldBlock) {
                     sender->metrics.lastError.store(result, std::memory_order_relaxed);
@@ -1641,13 +1713,33 @@ void startSenderProcessThread(AOOAppleSender *sender) {
                 continue;
             }
             const auto now = clock::now();
-            if (!deadlineAnchored) {
+            if (!deadlineAnchored || generation != pacedGeneration) {
                 nextDeadline = now;
                 deadlineAnchored = true;
+            } else {
+                const double nominalInterval = static_cast<double>(
+                    sender->streamBlockSize
+                ) / sender->sampleRate;
+                const auto sourceInterval = std::chrono::duration<double>(
+                    senderSourceInterval(
+                        previousSourceNtpTime,
+                        sourceNtpTime,
+                        nominalInterval
+                    )
+                );
+                nextDeadline += std::chrono::duration_cast<clock::duration>(
+                    sourceInterval
+                );
+                if (now > nextDeadline + blockPeriod * 4) {
+                    nextDeadline = now;
+                }
             }
-            nextDeadline += blockPeriod;
-            if (nextDeadline > clock::now()) {
+            if (nextDeadline > now) {
                 std::this_thread::sleep_until(nextDeadline);
+            }
+            if (processNextSenderBlock(sender)) {
+                previousSourceNtpTime = sourceNtpTime;
+                pacedGeneration = generation;
             }
         }
 #endif
