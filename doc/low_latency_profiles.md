@@ -42,6 +42,11 @@ AOO source processor, and sends packets. If the audio producer overruns the
 main queue, a bounded gap queue preserves the absolute sample timeline by
 emitting silence rather than compressing time.
 
+On Apple platforms the AOO client socket uses the interactive-voice network
+service class. Both low-latency profiles carry constant-rate, delay-sensitive
+audio, so the operating system can select low-jitter queues instead of the
+default best-effort service class.
+
 At the receiver, an isolated missing block produces silence while sequence and
 sample position continue forward. Four consecutive missing blocks enter
 reacquisition. The receiver then waits for a complete consecutive prefix at

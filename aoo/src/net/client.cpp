@@ -2264,6 +2264,23 @@ AooError udp_client::setup(Client& client, AooClientSettings& settings) {
                 client.handlePacket(data, size, addr.address(), addr.length());
 
             });
+#if defined(__APPLE__)
+            // Low-latency AOO streams are constant-rate interactive audio.
+            // Ask the Apple network stack for its lowest-jitter service class
+            // instead of leaving these packets in best-effort queues.
+            const int serviceType = NET_SERVICE_TYPE_VO;
+            if (::setsockopt(
+                    udp_server_.socket().native_handle(),
+                    SOL_SOCKET,
+                    SO_NET_SERVICE_TYPE,
+                    &serviceType,
+                    sizeof(serviceType)
+                ) != 0) {
+                socket::print_last_error(
+                    "AooClient: couldn't set interactive-audio network service type"
+                );
+            }
+#endif
         } catch (const udp_error& e) {
             LOG_ERROR("AooClient: failed to start UDP socket: " << e.what());
             socket::set_last_error(e.code());
