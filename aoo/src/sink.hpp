@@ -360,6 +360,9 @@ public:
 
     void observe_low_latency_arrival(const net_packet& packet);
     void observe_low_latency_completion(const net_packet& packet) const;
+    void observe_low_latency_stale_datagram() const;
+    void observe_low_latency_incomplete_block() const;
+    void observe_low_latency_trimmed_backlog(AooUInt64 count) const;
     AooError get_low_latency_statistics(
         AooLowLatencySinkStatistics& statistics
     ) const;
@@ -461,6 +464,13 @@ private:
     mutable std::atomic<int32_t> low_latency_completion_stream_id_{
         kAooIdInvalid
     };
+    mutable std::atomic<uint64_t> low_latency_datagram_count_{0};
+    mutable std::atomic<uint64_t> low_latency_stale_datagram_count_{0};
+    mutable std::atomic<uint64_t> low_latency_incomplete_block_count_{0};
+    mutable std::atomic<uint64_t> low_latency_trimmed_backlog_block_count_{0};
+    mutable std::atomic<int64_t> low_latency_last_datagram_time_ns_{0};
+    mutable std::atomic<int64_t> low_latency_latest_datagram_gap_ns_{0};
+    mutable std::atomic<int64_t> low_latency_maximum_datagram_gap_ns_{0};
     std::atomic<AooUInt32> low_latency_target_frames_{0};
 
     // events

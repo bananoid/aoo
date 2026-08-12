@@ -2841,6 +2841,12 @@ void AOOAppleReceiverGetStatus(
             lowLatencyStatistics.arrivalObservationCount;
         status->completionObservationCount =
             lowLatencyStatistics.completionObservationCount;
+        status->datagramObservationCount =
+            lowLatencyStatistics.datagramObservationCount;
+        status->staleDatagramCount = lowLatencyStatistics.staleDatagramCount;
+        status->incompleteBlockCount = lowLatencyStatistics.incompleteBlockCount;
+        status->trimmedBacklogBlockCount =
+            lowLatencyStatistics.trimmedBacklogBlockCount;
         status->latestArrivalResidualMilliseconds =
             lowLatencyStatistics.latestArrivalResidual * 1000.0;
         status->p99ArrivalResidualMilliseconds =
@@ -2849,6 +2855,10 @@ void AOOAppleReceiverGetStatus(
             lowLatencyStatistics.latestCompletionResidual * 1000.0;
         status->p99CompletionResidualMilliseconds =
             lowLatencyStatistics.p99CompletionResidual * 1000.0;
+        status->latestDatagramGapMilliseconds =
+            lowLatencyStatistics.latestDatagramGap * 1000.0;
+        status->maximumDatagramGapMilliseconds =
+            lowLatencyStatistics.maximumDatagramGap * 1000.0;
     }
     status->targetLatencyMilliseconds = receiver->targetLatencySeconds.load(
         std::memory_order_acquire

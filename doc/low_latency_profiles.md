@@ -45,9 +45,11 @@ emitting silence rather than compressing time.
 At the receiver, an isolated missing block produces silence while sequence and
 sample position continue forward. Four consecutive missing blocks enter
 reacquisition. The receiver then waits for a complete consecutive prefix at
-the fixed target depth, discards stale packets, and resumes without moving its
-sample position backward. Dynamic resampling remains enabled only for slow
-independent-device clock drift.
+the fixed target depth. If queued delivery resumes with a larger backlog, the
+receiver drops the oldest complete blocks before playout so the backlog cannot
+become additional latency. It then discards stale packets and resumes without
+moving its sample position backward. Dynamic resampling remains enabled only
+for slow independent-device clock drift.
 
 ## Adaptive Wireless
 
@@ -109,7 +111,8 @@ and reading rich status are non-realtime operations. Once configured:
 
 The public API reports handoff drops, UDP datagram attempts and failures, late
 packets, concealments, resends, reacquisitions, underruns, overruns, arrival
-residuals, clock drift, buffer fill, target latency, and timestamp-derived
+residuals, receive-datagram gaps, stale fragments, incomplete blocks, trimmed
+backlog, clock drift, buffer fill, target latency, and timestamp-derived
 presentation latency. Applications should validate these metrics on their
 target hardware and network; the default targets are starting points, not
 latency guarantees.

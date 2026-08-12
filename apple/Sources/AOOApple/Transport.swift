@@ -484,6 +484,10 @@ public struct AOOReceiverStatus: Codable, Equatable, Sendable {
     public var adaptiveAdjustmentCount: UInt64
     public var arrivalObservationCount: UInt64
     public var completionObservationCount: UInt64
+    public var datagramObservationCount: UInt64
+    public var staleDatagramCount: UInt64
+    public var incompleteBlockCount: UInt64
+    public var trimmedBacklogBlockCount: UInt64
     public var sourceSamplePosition: UInt64
     public var timestampPingCount: UInt64
     public var aooStreamTimeSampleCount: UInt64
@@ -508,6 +512,8 @@ public struct AOOReceiverStatus: Codable, Equatable, Sendable {
     public var p99ArrivalResidualMilliseconds: Double
     public var latestCompletionResidualMilliseconds: Double
     public var p99CompletionResidualMilliseconds: Double
+    public var latestDatagramGapMilliseconds: Double
+    public var maximumDatagramGapMilliseconds: Double
     public var estimatedPresentationToPresentationLatencyMilliseconds: Double?
     public var targetLatencyMilliseconds: Double
     public var bufferCapacityMilliseconds: Double
@@ -554,6 +560,10 @@ public struct AOOReceiverStatus: Codable, Equatable, Sendable {
         adaptiveAdjustmentCount: UInt64 = 0,
         arrivalObservationCount: UInt64 = 0,
         completionObservationCount: UInt64 = 0,
+        datagramObservationCount: UInt64 = 0,
+        staleDatagramCount: UInt64 = 0,
+        incompleteBlockCount: UInt64 = 0,
+        trimmedBacklogBlockCount: UInt64 = 0,
         sourceSamplePosition: UInt64 = 0,
         timestampPingCount: UInt64 = 0,
         aooStreamTimeSampleCount: UInt64 = 0,
@@ -578,6 +588,8 @@ public struct AOOReceiverStatus: Codable, Equatable, Sendable {
         p99ArrivalResidualMilliseconds: Double = 0,
         latestCompletionResidualMilliseconds: Double = 0,
         p99CompletionResidualMilliseconds: Double = 0,
+        latestDatagramGapMilliseconds: Double = 0,
+        maximumDatagramGapMilliseconds: Double = 0,
         estimatedPresentationToPresentationLatencyMilliseconds: Double? = nil,
         targetLatencyMilliseconds: Double = 0,
         bufferCapacityMilliseconds: Double = 0,
@@ -623,6 +635,10 @@ public struct AOOReceiverStatus: Codable, Equatable, Sendable {
         self.adaptiveAdjustmentCount = adaptiveAdjustmentCount
         self.arrivalObservationCount = arrivalObservationCount
         self.completionObservationCount = completionObservationCount
+        self.datagramObservationCount = datagramObservationCount
+        self.staleDatagramCount = staleDatagramCount
+        self.incompleteBlockCount = incompleteBlockCount
+        self.trimmedBacklogBlockCount = trimmedBacklogBlockCount
         self.sourceSamplePosition = sourceSamplePosition
         self.timestampPingCount = timestampPingCount
         self.aooStreamTimeSampleCount = aooStreamTimeSampleCount
@@ -647,6 +663,8 @@ public struct AOOReceiverStatus: Codable, Equatable, Sendable {
         self.p99ArrivalResidualMilliseconds = p99ArrivalResidualMilliseconds
         self.latestCompletionResidualMilliseconds = latestCompletionResidualMilliseconds
         self.p99CompletionResidualMilliseconds = p99CompletionResidualMilliseconds
+        self.latestDatagramGapMilliseconds = latestDatagramGapMilliseconds
+        self.maximumDatagramGapMilliseconds = maximumDatagramGapMilliseconds
         self.estimatedPresentationToPresentationLatencyMilliseconds = estimatedPresentationToPresentationLatencyMilliseconds
         self.targetLatencyMilliseconds = targetLatencyMilliseconds
         self.bufferCapacityMilliseconds = bufferCapacityMilliseconds
@@ -838,6 +856,10 @@ public final class AOOReceiver: @unchecked Sendable {
             adaptiveAdjustmentCount: raw.adaptiveAdjustmentCount,
             arrivalObservationCount: raw.arrivalObservationCount,
             completionObservationCount: raw.completionObservationCount,
+            datagramObservationCount: raw.datagramObservationCount,
+            staleDatagramCount: raw.staleDatagramCount,
+            incompleteBlockCount: raw.incompleteBlockCount,
+            trimmedBacklogBlockCount: raw.trimmedBacklogBlockCount,
             sourceSamplePosition: raw.sourceSamplePosition,
             timestampPingCount: raw.pingEventCount,
             aooStreamTimeSampleCount: raw.aooStreamTimeEventCount,
@@ -870,6 +892,8 @@ public final class AOOReceiver: @unchecked Sendable {
             p99ArrivalResidualMilliseconds: raw.p99ArrivalResidualMilliseconds,
             latestCompletionResidualMilliseconds: raw.latestCompletionResidualMilliseconds,
             p99CompletionResidualMilliseconds: raw.p99CompletionResidualMilliseconds,
+            latestDatagramGapMilliseconds: raw.latestDatagramGapMilliseconds,
+            maximumDatagramGapMilliseconds: raw.maximumDatagramGapMilliseconds,
             estimatedPresentationToPresentationLatencyMilliseconds: timestampMetrics.estimatedPresentationToPresentationLatencyMilliseconds,
             targetLatencyMilliseconds: raw.targetLatencyMilliseconds,
             bufferCapacityMilliseconds: raw.bufferCapacityMilliseconds,

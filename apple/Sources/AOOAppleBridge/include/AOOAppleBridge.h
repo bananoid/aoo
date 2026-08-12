@@ -98,6 +98,10 @@ typedef struct AOOAppleReceiverStatus {
     uint64_t adaptiveAdjustmentCount;
     uint64_t arrivalObservationCount;
     uint64_t completionObservationCount;
+    uint64_t datagramObservationCount;
+    uint64_t staleDatagramCount;
+    uint64_t incompleteBlockCount;
+    uint64_t trimmedBacklogBlockCount;
     uint64_t pingEventCount;
     uint64_t aooStreamTimeEventCount;
     uint64_t streamTimeEventCount;
@@ -116,6 +120,8 @@ typedef struct AOOAppleReceiverStatus {
     double p99ArrivalResidualMilliseconds;
     double latestCompletionResidualMilliseconds;
     double p99CompletionResidualMilliseconds;
+    double latestDatagramGapMilliseconds;
+    double maximumDatagramGapMilliseconds;
     double targetLatencyMilliseconds;
     double bufferCapacityMilliseconds;
     double bufferFillRatio;

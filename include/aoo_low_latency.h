@@ -71,6 +71,12 @@ typedef struct AooLowLatencySinkStatistics {
     AooUInt64 completionObservationCount;
     AooSeconds latestCompletionResidual;
     AooSeconds p99CompletionResidual;
+    AooUInt64 datagramObservationCount;
+    AooUInt64 staleDatagramCount;
+    AooUInt64 incompleteBlockCount;
+    AooUInt64 trimmedBacklogBlockCount;
+    AooSeconds latestDatagramGap;
+    AooSeconds maximumDatagramGap;
 } AooLowLatencySinkStatistics;
 
 typedef struct AooLowLatencyClientSendStatistics {

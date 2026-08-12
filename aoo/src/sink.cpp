@@ -7,6 +7,7 @@
 #include "codec/aoo_pcm.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 // use packet-loss-conceilment for buffering.
@@ -622,7 +623,35 @@ void summarize_low_latency_observations(
 } // namespace
 
 void aoo::Sink::observe_low_latency_arrival(const net_packet& packet) {
-    if (!(packet.flags & kAooBinMsgDataLowLatency) || packet.frame_index != 0) {
+    if (!(packet.flags & kAooBinMsgDataLowLatency)) {
+        return;
+    }
+    low_latency_datagram_count_.fetch_add(1, std::memory_order_relaxed);
+    const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()
+    ).count();
+    const auto previous = low_latency_last_datagram_time_ns_.exchange(
+        now,
+        std::memory_order_relaxed
+    );
+    if (previous > 0 && now >= previous) {
+        const auto gap = now - previous;
+        low_latency_latest_datagram_gap_ns_.store(
+            gap,
+            std::memory_order_relaxed
+        );
+        auto maximum = low_latency_maximum_datagram_gap_ns_.load(
+            std::memory_order_relaxed
+        );
+        while (gap > maximum
+               && !low_latency_maximum_datagram_gap_ns_.compare_exchange_weak(
+                   maximum,
+                   gap,
+                   std::memory_order_relaxed,
+                   std::memory_order_relaxed
+               )) {}
+    }
+    if (packet.frame_index != 0) {
         return;
     }
     record_low_latency_observation(
@@ -631,6 +660,21 @@ void aoo::Sink::observe_low_latency_arrival(const net_packet& packet) {
         low_latency_arrival_write_index_,
         low_latency_arrival_count_,
         low_latency_arrival_stream_id_
+    );
+}
+
+void aoo::Sink::observe_low_latency_stale_datagram() const {
+    low_latency_stale_datagram_count_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void aoo::Sink::observe_low_latency_incomplete_block() const {
+    low_latency_incomplete_block_count_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void aoo::Sink::observe_low_latency_trimmed_backlog(AooUInt64 count) const {
+    low_latency_trimmed_backlog_block_count_.fetch_add(
+        count,
+        std::memory_order_relaxed
     );
 }
 
@@ -666,6 +710,25 @@ AooError aoo::Sink::get_low_latency_statistics(
         statistics.latestCompletionResidual,
         statistics.p99CompletionResidual
     );
+    statistics.datagramObservationCount = low_latency_datagram_count_.load(
+        std::memory_order_relaxed
+    );
+    statistics.staleDatagramCount = low_latency_stale_datagram_count_.load(
+        std::memory_order_relaxed
+    );
+    statistics.incompleteBlockCount = low_latency_incomplete_block_count_.load(
+        std::memory_order_relaxed
+    );
+    statistics.trimmedBacklogBlockCount =
+        low_latency_trimmed_backlog_block_count_.load(
+            std::memory_order_relaxed
+        );
+    statistics.latestDatagramGap = static_cast<double>(
+        low_latency_latest_datagram_gap_ns_.load(std::memory_order_relaxed)
+    ) * 1.0e-9;
+    statistics.maximumDatagramGap = static_cast<double>(
+        low_latency_maximum_datagram_gap_ns_.load(std::memory_order_relaxed)
+    ) * 1.0e-9;
     return kAooOk;
 }
 
@@ -1908,6 +1971,7 @@ AooError source_desc::handle_data(const Sink& s, net_packet& d, bool binary)
         if (d.absolute_sample_position + d.block_frames
             <= last_absolute_sample_position_.load(std::memory_order_acquire)) {
             LOG_VERBOSE("AooSink: discard stale low-latency packet");
+            s.observe_low_latency_stale_datagram();
             return kAooOk;
         }
     } else if (d.flags & kAooBinMsgDataLowLatency) {
@@ -2464,6 +2528,7 @@ bool source_desc::add_packet(const Sink& s, const net_packet& d,
         && d.absolute_sample_position + d.block_frames
             <= last_absolute_sample_position_.load(std::memory_order_acquire)) {
         LOG_VERBOSE("AooSink: discard expired low-latency block");
+        s.observe_low_latency_stale_datagram();
         return false;
     }
 
@@ -2650,6 +2715,33 @@ bool source_desc::try_decode_block(const Sink& s, AooSample* buffer, stream_stat
                 complete_blocks++;
             }
         }
+        if (low_latency_enabled_
+            && low_latency_configuration_.profile
+                == kAooLowLatencyProfileDeterministicWired
+            && complete_blocks > latency_blocks_) {
+            const int32_t trimCount = complete_blocks - latency_blocks_;
+            for (int32_t index = 0; index < trimCount; ++index) {
+                const auto& stale = jitter_buffer_.front();
+                const auto frames = std::max<uint64_t>(
+                    stale.block_frames,
+                    static_cast<uint64_t>(format_->blockSize)
+                );
+                const auto blockEnd = stale.absolute_sample_position + frames;
+                auto current = last_absolute_sample_position_.load(
+                    std::memory_order_relaxed
+                );
+                while (current < blockEnd
+                       && !last_absolute_sample_position_.compare_exchange_weak(
+                           current,
+                           blockEnd,
+                           std::memory_order_release,
+                           std::memory_order_relaxed
+                       )) {}
+                jitter_buffer_.pop();
+            }
+            complete_blocks -= trimCount;
+            s.observe_low_latency_trimmed_backlog(trimCount);
+        }
         const bool needs_complete_low_latency_depth = low_latency_enabled_
             && complete_blocks < latency_blocks_;
     #if BUFFER_METHOD == BUFFER_BLOCKS
@@ -2770,6 +2862,7 @@ bool source_desc::try_decode_block(const Sink& s, AooSample* buffer, stream_stat
             if (consecutive_missing_blocks_ >= 4) {
                 consecutive_missing_blocks_ = 0;
                 jitter_buffer_.reset();
+                resampler_.reset();
                 stream_state_ = stream_state::buffering;
                 auto underrun = make_event<source_event>(kAooEventBufferUnderrun, ep);
                 queue_event(std::move(underrun));
@@ -2825,6 +2918,9 @@ bool source_desc::try_decode_block(const Sink& s, AooSample* buffer, stream_stat
         sr = format_->sampleRate; // nominal samplerate
         // keep current channel
         stats.dropped++;
+        if (low_latency_enabled_) {
+            s.observe_low_latency_incomplete_block();
+        }
         LOG_VERBOSE("AooSink: dropped block " << b.sequence);
         LOG_DEBUG("AooSink: remaining blocks: " << jitter_buffer_.size() - 1);
     }
@@ -2953,6 +3049,7 @@ bool source_desc::try_decode_block(const Sink& s, AooSample* buffer, stream_stat
             if (consecutive_missing_blocks_ >= 4) {
                 consecutive_missing_blocks_ = 0;
                 jitter_buffer_.reset();
+                resampler_.reset();
                 stream_state_ = stream_state::buffering;
                 auto underrun = make_event<source_event>(
                     kAooEventBufferUnderrun,

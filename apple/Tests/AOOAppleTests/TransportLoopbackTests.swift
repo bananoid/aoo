@@ -306,6 +306,81 @@ struct TransportLoopbackTests {
         #expect(receiver.status.processErrorCount == 0)
     }
 
+    @Test func deterministicWiredTrimsQueuedBacklogToTargetDepth() throws {
+        let port = testPort(offset: 41)
+        var receiverConfiguration = AOOStreamConfiguration
+            .automaticReceiver(channelCapacity: 2)
+        receiverConfiguration.maximumCallbackFrames = 64
+        let receiver = try AOOReceiver(
+            localPort: port,
+            configuration: receiverConfiguration,
+            fixedCallbackSize: true
+        )
+        receiver.setMonitorPair(startingAtOneBased: 1)
+
+        var senderConfiguration = AOOStreamConfiguration
+            .deterministicWired(channelCount: 2)
+        senderConfiguration.maximumCallbackFrames = 64
+        let sender = try AOOSender(configuration: senderConfiguration)
+        try sender.apply(AOOPeerConfiguration(
+            isEnabled: true,
+            host: "127.0.0.1",
+            receiverPort: port
+        ))
+
+        _ = pump(
+            sender: sender,
+            receiver: receiver,
+            sourceChannelCount: 2,
+            sourceLeftChannel: 0,
+            sourceRightChannel: 1,
+            frameCount: 64,
+            iterations: 900
+        )
+        #expect(waitUntil { receiver.status.streamActive })
+
+        try sender.setSimulatedPacketLoss(1)
+        _ = pump(
+            sender: sender,
+            receiver: receiver,
+            sourceChannelCount: 2,
+            sourceLeftChannel: 0,
+            sourceRightChannel: 1,
+            frameCount: 64,
+            iterations: 8,
+            stopAfterSignal: false
+        )
+        try sender.setSimulatedPacketLoss(0)
+
+        sendWithoutReceiving(
+            sender: sender,
+            sourceChannelCount: 2,
+            frameCount: 64,
+            iterations: 80
+        )
+
+        var outputLeft = Array(repeating: Float.zero, count: 64)
+        var outputRight = Array(repeating: Float.zero, count: 64)
+        outputLeft.withUnsafeMutableBufferPointer { left in
+            outputRight.withUnsafeMutableBufferPointer { right in
+                receiver.processStereo(
+                    outputLeft: left.baseAddress!,
+                    outputRight: right.baseAddress!,
+                    frameCount: 64
+                )
+            }
+        }
+
+        let status = receiver.status
+        let blockMilliseconds = 64.0 / sender.sampleRate * 1_000.0
+        #expect(status.trimmedBacklogBlockCount > 0)
+        #expect(status.bufferedAudioMilliseconds >= 0)
+        #expect(
+            status.bufferedAudioMilliseconds
+                <= status.targetLatencyMilliseconds + blockMilliseconds * 2
+        )
+    }
+
     private func pump(
         sender: AOOSender,
         receiver: AOOReceiver,
@@ -380,6 +455,32 @@ struct TransportLoopbackTests {
             Thread.sleep(forTimeInterval: 0.002)
         } while Date() < deadline
         return condition()
+    }
+
+    private func sendWithoutReceiving(
+        sender: AOOSender,
+        sourceChannelCount: Int,
+        frameCount: Int,
+        iterations: Int
+    ) {
+        let input = Array(
+            repeating: Float(0.125),
+            count: frameCount * sourceChannelCount
+        )
+        let blockDuration = Double(frameCount) / sender.sampleRate
+        for _ in 0..<iterations {
+            input.withUnsafeBufferPointer { input in
+                sender.processPlanar(
+                    baseAddress: input.baseAddress!,
+                    channelStride: frameCount,
+                    frameOffset: 0,
+                    frameCount: frameCount,
+                    sourceChannelCount: sourceChannelCount
+                )
+            }
+            Thread.sleep(forTimeInterval: blockDuration)
+        }
+        Thread.sleep(forTimeInterval: blockDuration * 4)
     }
 
     private func testPort(offset: Int) -> Int {
