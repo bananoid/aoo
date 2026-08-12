@@ -294,6 +294,7 @@ struct TransportLoopbackTests {
         #expect(peak > 0.05)
         #expect(waitUntil(timeout: 1) { receiver.status.streamActive })
         #expect(receiver.status.reacquisitionCount > 0)
+        #expect(abs(receiver.status.jitterBufferLatencyMilliseconds - 4) < 0.1)
         #expect(receiver.status.processErrorCount == 0)
     }
 

@@ -2238,7 +2238,11 @@ bool source_desc::process(const Sink& s, AooSample **buffer, int32_t nsamples,
 }
 
 void source_desc::check_latency(const Sink& s) {
-    auto buffer_latency = stream_samples_;
+    // Low-latency reacquisition preserves the monotonic stream sample counter.
+    // Report the configured buffering depth rather than cumulative stream age.
+    auto buffer_latency = low_latency_enabled_
+        ? static_cast<double>(latency_samples_)
+        : stream_samples_;
     if (buffer_latency != buffer_latency_) {
         buffer_latency_ = buffer_latency;
 
