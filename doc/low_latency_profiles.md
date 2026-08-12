@@ -47,6 +47,10 @@ service class. Both low-latency profiles carry constant-rate, delay-sensitive
 audio, so the operating system can select low-jitter queues instead of the
 default best-effort service class.
 
+The client applies its requested UDP receive-buffer size instead of relying on
+the platform default. This preserves queued datagrams across short scheduler
+stalls without changing the stream's presentation depth.
+
 At the receiver, an isolated missing block produces silence while sequence and
 sample position continue forward. Four consecutive missing blocks enter
 reacquisition. The receiver then waits for a complete consecutive prefix at
@@ -55,6 +59,11 @@ receiver drops the oldest complete blocks before playout so the backlog cannot
 become additional latency. It then discards stale packets and resumes without
 moving its sample position backward. Dynamic resampling remains enabled only
 for slow independent-device clock drift.
+
+If a deterministic receiver joins in the middle of a fragmented block, it
+discards that incomplete leading block only after a complete target-depth
+prefix is available behind it. A stale partial block therefore cannot hold
+initial acquisition indefinitely.
 
 ## Adaptive Wireless
 

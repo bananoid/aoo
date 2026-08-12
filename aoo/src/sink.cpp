@@ -2714,6 +2714,43 @@ bool source_desc::try_decode_block(const Sink& s, AooSample* buffer, stream_stat
         // (We take either the process samples or stream samples, depending on
         // which has the smaller granularity)
         auto elapsed = std::min<int32_t>(process_samples_, stream_samples_ + 0.5);
+        if (low_latency_enabled_
+            && low_latency_configuration_.profile
+                == kAooLowLatencyProfileDeterministicWired) {
+            while (!jitter_buffer_.empty()
+                   && !jitter_buffer_.front().complete()) {
+                int32_t completeAfterFront = 0;
+                auto block = jitter_buffer_.begin();
+                ++block;
+                for (; block != jitter_buffer_.end(); ++block) {
+                    if (!block->complete()) {
+                        break;
+                    }
+                    completeAfterFront++;
+                }
+                if (completeAfterFront < latency_blocks_) {
+                    break;
+                }
+                const auto& stale = jitter_buffer_.front();
+                const auto frames = std::max<uint64_t>(
+                    stale.block_frames,
+                    static_cast<uint64_t>(format_->blockSize)
+                );
+                const auto blockEnd = stale.absolute_sample_position + frames;
+                auto current = last_absolute_sample_position_.load(
+                    std::memory_order_relaxed
+                );
+                while (current < blockEnd
+                       && !last_absolute_sample_position_.compare_exchange_weak(
+                           current,
+                           blockEnd,
+                           std::memory_order_release,
+                           std::memory_order_relaxed
+                       )) {}
+                jitter_buffer_.pop();
+                s.observe_low_latency_incomplete_block();
+            }
+        }
         int32_t complete_blocks = 0;
         if (low_latency_enabled_) {
             for (const auto& block : jitter_buffer_) {

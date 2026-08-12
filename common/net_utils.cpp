@@ -864,6 +864,10 @@ void base_socket::set_receive_buffer_size(int bufsize) {
     if (bufsize < oldsize){
         return;
     }
+    int result = set_int_option(socket_, SOL_SOCKET, SO_RCVBUF, bufsize);
+    if (result != 0) {
+        throw socket_error(socket::get_last_error());
+    }
 #if DEBUG_SOCKET_BUFFER
     fprintf(stderr, "new receive buffer size: %d\n", receive_buffer_size());
     fflush(stderr);
