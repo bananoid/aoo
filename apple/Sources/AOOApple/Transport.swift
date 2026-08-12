@@ -22,6 +22,18 @@ public enum AOOTransportError: Error, Equatable, LocalizedError, Sendable {
     }
 }
 
+public enum AOOAudioClock {
+    @inline(__always)
+    public static func currentNTPTime() -> UInt64 {
+        AOOAppleCurrentNTPTime()
+    }
+
+    @inline(__always)
+    public static func ntpTime(forMachHostTime hostTime: UInt64) -> UInt64 {
+        AOOAppleNTPTimeForMachHostTime(hostTime)
+    }
+}
+
 public struct AOOPeerConfiguration: Codable, Equatable, Sendable {
     public static let defaultReceiverPort = 9_999
     /// Zero asks the OS for an ephemeral UDP port, avoiding collisions between
@@ -264,7 +276,7 @@ public final class AOOSender: @unchecked Sendable {
 
     @inline(__always)
     public static func currentNTPTime() -> UInt64 {
-        AOOAppleCurrentNTPTime()
+        AOOAudioClock.currentNTPTime()
     }
 
     @inline(__always)
@@ -774,7 +786,12 @@ public final class AOOReceiver: @unchecked Sendable {
 
     @inline(__always)
     public static func currentNTPTime() -> UInt64 {
-        AOOAppleCurrentNTPTime()
+        AOOAudioClock.currentNTPTime()
+    }
+
+    @inline(__always)
+    public static func ntpTime(forMachHostTime hostTime: UInt64) -> UInt64 {
+        AOOAudioClock.ntpTime(forMachHostTime: hostTime)
     }
 
     @inline(__always)

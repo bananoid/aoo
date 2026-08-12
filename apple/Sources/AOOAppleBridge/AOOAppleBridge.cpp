@@ -1686,6 +1686,35 @@ uint64_t AOOAppleCurrentNTPTime(void) {
     return aoo_getCurrentNtpTime();
 }
 
+uint64_t AOOAppleNTPTimeForMachHostTime(uint64_t hostTime) {
+    const AooNtpTime currentNtpTime = aoo_getCurrentNtpTime();
+#if defined(__APPLE__)
+    if (hostTime == 0) {
+        return currentNtpTime;
+    }
+    mach_timebase_info_data_t timebase{};
+    mach_timebase_info(&timebase);
+    const uint64_t currentHostTime = mach_absolute_time();
+    const uint64_t tickDifference = hostTime >= currentHostTime
+        ? hostTime - currentHostTime
+        : currentHostTime - hostTime;
+    const long double nanoseconds = static_cast<long double>(tickDifference)
+        * static_cast<long double>(timebase.numer)
+        / static_cast<long double>(timebase.denom);
+    const int64_t nanosecondOffset = static_cast<int64_t>(std::min<long double>(
+        nanoseconds,
+        static_cast<long double>(INT64_MAX)
+    ));
+    return AOOAppleNTPTimeOffsetNanoseconds(
+        currentNtpTime,
+        hostTime >= currentHostTime ? nanosecondOffset : -nanosecondOffset
+    );
+#else
+    (void)hostTime;
+    return currentNtpTime;
+#endif
+}
+
 uint64_t AOOAppleNTPTimeOffsetFrames(
     uint64_t timestamp,
     int64_t frameOffset,

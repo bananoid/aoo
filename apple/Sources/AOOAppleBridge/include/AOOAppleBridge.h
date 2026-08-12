@@ -132,6 +132,7 @@ typedef struct AOOAppleReceiverStatus {
 const char *AOOAppleErrorString(int32_t errorCode);
 int32_t AOOAppleLastSocketErrorCode(void);
 uint64_t AOOAppleCurrentNTPTime(void);
+uint64_t AOOAppleNTPTimeForMachHostTime(uint64_t hostTime);
 uint64_t AOOAppleNTPTimeOffsetFrames(
     uint64_t timestamp,
     int64_t frameOffset,

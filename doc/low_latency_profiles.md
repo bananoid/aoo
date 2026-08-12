@@ -109,6 +109,10 @@ and reading rich status are non-realtime operations. Once configured:
   unless `fixedCallbackSize` is enabled; fixed mode requires every receiver
   callback to equal `maximumCallbackFrames` exactly.
 
+Apple render callbacks should pass the sample timeline from Core Audio rather
+than the wall-clock time at callback entry. `AOOAudioClock.ntpTime(forMachHostTime:)`
+maps `AudioTimeStamp.mHostTime` onto AOO's NTP clock for this purpose.
+
 The public API reports handoff drops, UDP datagram attempts and failures, late
 packets, concealments, resends, reacquisitions, underruns, overruns, arrival
 residuals, receive-datagram gaps, stale fragments, incomplete blocks, trimmed
