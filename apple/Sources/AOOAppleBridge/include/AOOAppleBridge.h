@@ -148,6 +148,10 @@ int32_t AOOAppleSenderSetDestination(
 
 void AOOAppleSenderClearDestination(AOOAppleSender *sender);
 int32_t AOOAppleSenderSetEnabled(AOOAppleSender *sender, int32_t enabled);
+int32_t AOOAppleSenderSetSimulatedPacketLoss(
+    AOOAppleSender *sender,
+    float fraction
+);
 
 int32_t AOOAppleSenderProcessPlanarAtTime(
     AOOAppleSender *sender,

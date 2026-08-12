@@ -216,6 +216,13 @@ public final class AOOSender: @unchecked Sendable {
         )
     }
 
+    func setSimulatedPacketLoss(_ fraction: Float) throws {
+        try Self.check(
+            AOOAppleSenderSetSimulatedPacketLoss(handle, fraction),
+            operation: "AOO packet-loss simulation failed"
+        )
+    }
+
     @inline(__always)
     public static func currentNTPTime() -> UInt64 {
         AOOAppleCurrentNTPTime()

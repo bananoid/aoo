@@ -1876,6 +1876,22 @@ int32_t AOOAppleSenderSetEnabled(AOOAppleSender *sender, int32_t enabled) {
     return result;
 }
 
+int32_t AOOAppleSenderSetSimulatedPacketLoss(
+    AOOAppleSender *sender,
+    float fraction
+) {
+    if (!sender || !sender->client || !std::isfinite(fraction)
+        || fraction < 0.0f || fraction > 1.0f) {
+        return kAooErrorBadArgument;
+    }
+    return AooClient_control(
+        sender->client,
+        kAooCtlSetSimulatePacketLoss,
+        0,
+        AOO_ARG(fraction)
+    );
+}
+
 int32_t AOOAppleSenderProcessPlanarAtTime(
     AOOAppleSender *sender,
     const float *planarBaseAddress,

@@ -27,6 +27,11 @@ let bridgeCXXSettings: [CXXSetting] = [
     .headerSearchPath("deps/oscpack"),
     .define("AOO_BUILD"),
     .define("AOO_NET", to: "1"),
+    .define(
+        "AOO_CLIENT_SIMULATE",
+        to: "1",
+        .when(configuration: .debug)
+    ),
     .define("AOO_USE_IPV6", to: "1"),
     .define("AOO_USE_OPUS", to: "0"),
     .define("AOO_SAMPLE_SIZE", to: "32"),

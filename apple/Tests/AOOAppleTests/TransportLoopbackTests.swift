@@ -235,6 +235,68 @@ struct TransportLoopbackTests {
         }
     }
 
+    @Test func deterministicWiredReacquiresAfterASequenceGap() throws {
+        let port = testPort(offset: 40)
+        var receiverConfiguration = AOOStreamConfiguration
+            .automaticReceiver(channelCapacity: 2)
+        receiverConfiguration.maximumCallbackFrames = 64
+        let receiver = try AOOReceiver(
+            localPort: port,
+            configuration: receiverConfiguration,
+            fixedCallbackSize: true
+        )
+        receiver.setMonitorPair(startingAtOneBased: 1)
+
+        var senderConfiguration = AOOStreamConfiguration
+            .deterministicWired(channelCount: 2)
+        senderConfiguration.maximumCallbackFrames = 64
+        let sender = try AOOSender(configuration: senderConfiguration)
+        try sender.apply(AOOPeerConfiguration(
+            isEnabled: true,
+            host: "127.0.0.1",
+            receiverPort: port
+        ))
+
+        _ = pump(
+            sender: sender,
+            receiver: receiver,
+            sourceChannelCount: 2,
+            sourceLeftChannel: 0,
+            sourceRightChannel: 1,
+            frameCount: 64,
+            iterations: 900
+        )
+        #expect(waitUntil { receiver.status.streamActive })
+
+        try sender.setSimulatedPacketLoss(1)
+        _ = pump(
+            sender: sender,
+            receiver: receiver,
+            sourceChannelCount: 2,
+            sourceLeftChannel: 0,
+            sourceRightChannel: 1,
+            frameCount: 64,
+            iterations: 8,
+            stopAfterSignal: false
+        )
+        try sender.setSimulatedPacketLoss(0)
+
+        let peak = pump(
+            sender: sender,
+            receiver: receiver,
+            sourceChannelCount: 2,
+            sourceLeftChannel: 0,
+            sourceRightChannel: 1,
+            frameCount: 64,
+            iterations: 1_200,
+            stopAfterSignal: false
+        )
+        #expect(peak > 0.05)
+        #expect(waitUntil(timeout: 1) { receiver.status.streamActive })
+        #expect(receiver.status.reacquisitionCount > 0)
+        #expect(receiver.status.processErrorCount == 0)
+    }
+
     private func pump(
         sender: AOOSender,
         receiver: AOOReceiver,
@@ -243,7 +305,8 @@ struct TransportLoopbackTests {
         sourceRightChannel: Int,
         frameCount: Int,
         iterations: Int,
-        injectNonfiniteSamples: Bool = false
+        injectNonfiniteSamples: Bool = false,
+        stopAfterSignal: Bool = true
     ) -> Float {
         var input = Array(
             repeating: Float.zero,
@@ -262,7 +325,10 @@ struct TransportLoopbackTests {
         var peak: Float = 0
         let blockDuration = Double(frameCount) / sender.sampleRate
 
-        for _ in 0..<iterations where peak <= 0.05 {
+        for _ in 0..<iterations {
+            if stopAfterSignal, peak > 0.05 {
+                break
+            }
             input.withUnsafeBufferPointer { input in
                 sender.processPlanar(
                     baseAddress: input.baseAddress!,

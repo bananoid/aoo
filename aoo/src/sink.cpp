@@ -2895,6 +2895,7 @@ bool source_desc::try_decode_block(const Sink& s, AooSample* buffer, stream_stat
                     0
                 );
                 queue_event(std::move(buffering));
+                return true;
             }
         }
     }
