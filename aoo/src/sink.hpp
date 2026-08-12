@@ -251,7 +251,8 @@ private:
     aoo::time_tag stream_tt_;
     aoo::time_tag local_tt_;
     int32_t sample_offset_ = 0;
-    int32_t stream_start_ = 0;
+    // Zero is a valid sample offset for a prebuffered stream start.
+    int32_t stream_start_ = -1;
     int32_t source_latency_ = 0;
     int32_t sink_latency_ = 0;
     int32_t source_codec_delay_ = 0;

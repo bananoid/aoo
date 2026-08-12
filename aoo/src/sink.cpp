@@ -2310,7 +2310,7 @@ bool source_desc::process(const Sink& s, AooSample **buffer, int32_t nsamples,
 
     // send stream state event with correct sample offset.
     // we make sure that the offset lies within [0, nsamples-1]
-    if (stream_start_ > 0) {
+    if (stream_start_ >= 0) {
         auto offset = stream_start_ - process_samples_;
         if (offset < nsamples) {
             if (offset < 0) {
@@ -2322,7 +2322,7 @@ bool source_desc::process(const Sink& s, AooSample **buffer, int32_t nsamples,
             auto e = make_event<stream_state_event>(ep, kAooStreamStateActive, offset);
             queue_event(std::move(e));
 
-            stream_start_ = 0;
+            stream_start_ = -1;
         }
     }
 
@@ -3642,7 +3642,7 @@ void source_desc::reset_stream() {
     stream_messages_ = nullptr;
     process_samples_ = 0;
     stream_samples_ = 0;
-    stream_start_ = 0;
+    stream_start_ = -1;
     buffer_fill_ratio_.store(0, std::memory_order_relaxed);
     local_tt_.clear();
     last_ping_time_.store(-1e007); // force ping
