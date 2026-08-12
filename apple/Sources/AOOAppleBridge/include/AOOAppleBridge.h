@@ -84,6 +84,7 @@ typedef struct AOOAppleReceiverStatus {
     uint64_t processedFrameCount;
     uint64_t processErrorCount;
     uint64_t processBlockMismatchCount;
+    uint64_t processDeadlineMissCount;
     uint64_t streamStartCount;
     uint64_t streamActiveCount;
     uint64_t streamBufferingCount;
@@ -129,6 +130,8 @@ typedef struct AOOAppleReceiverStatus {
     double bufferedAudioMilliseconds;
     double sourceRealSampleRate;
     double realSampleRate;
+    double maximumProcessIntervalMilliseconds;
+    double processCadenceSampleRate;
 } AOOAppleReceiverStatus;
 
 const char *AOOAppleErrorString(int32_t errorCode);

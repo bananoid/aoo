@@ -336,6 +336,12 @@ struct ReceiverMetrics {
     std::atomic<uint64_t> processedFrames{0};
     std::atomic<uint64_t> processErrors{0};
     std::atomic<uint64_t> processBlockMismatches{0};
+    std::atomic<uint64_t> processDeadlineMisses{0};
+    std::atomic<int64_t> lastProcessNanoseconds{0};
+    std::atomic<int64_t> cadenceStartNanoseconds{0};
+    std::atomic<int64_t> cadenceLastNanoseconds{0};
+    std::atomic<uint64_t> cadenceFrameCount{0};
+    std::atomic<double> maximumProcessIntervalMilliseconds{0};
     std::atomic<uint64_t> streamStarts{0};
     std::atomic<uint64_t> streamActiveTransitions{0};
     std::atomic<uint64_t> streamBufferingTransitions{0};
@@ -2745,6 +2751,51 @@ int32_t AOOAppleReceiverProcessStereoAtTime(
         || sinkNtpTime == 0) {
         return kAooErrorBadArgument;
     }
+    const int64_t processNanoseconds = monotonicNanoseconds();
+    int64_t unsetCadenceStart = 0;
+    receiver->metrics.cadenceStartNanoseconds.compare_exchange_strong(
+        unsetCadenceStart,
+        processNanoseconds,
+        std::memory_order_relaxed
+    );
+    receiver->metrics.cadenceLastNanoseconds.store(
+        processNanoseconds,
+        std::memory_order_relaxed
+    );
+    receiver->metrics.cadenceFrameCount.fetch_add(
+        static_cast<uint64_t>(frameCount),
+        std::memory_order_relaxed
+    );
+    const int64_t previousProcessNanoseconds =
+        receiver->metrics.lastProcessNanoseconds.exchange(
+            processNanoseconds,
+            std::memory_order_relaxed
+        );
+    const int32_t previousFrameCount =
+        receiver->metrics.lastProcessFrameCount.load(std::memory_order_relaxed);
+    if (previousProcessNanoseconds > 0
+        && previousFrameCount > 0
+        && processNanoseconds >= previousProcessNanoseconds) {
+        const int64_t intervalNanoseconds =
+            processNanoseconds - previousProcessNanoseconds;
+        accumulateMaximum(
+            receiver->metrics.maximumProcessIntervalMilliseconds,
+            static_cast<double>(intervalNanoseconds) / 1.0e6
+        );
+        const double expectedNanoseconds = static_cast<double>(
+            previousFrameCount
+        ) / receiver->sampleRate * 1.0e9;
+        if (receiver->metrics.streamActive.load(std::memory_order_acquire) != 0
+            && intervalNanoseconds > std::max(
+                expectedNanoseconds * 1.5,
+                expectedNanoseconds + 500000.0
+            )) {
+            receiver->metrics.processDeadlineMisses.fetch_add(
+                1,
+                std::memory_order_relaxed
+            );
+        }
+    }
     if (receiver->fixedBlockSizeEnabled && frameCount != receiver->maximumBlockSize) {
         const size_t byteCount = static_cast<size_t>(frameCount) * sizeof(float);
         std::memset(outputLeft, 0, byteCount);
@@ -2943,6 +2994,9 @@ void AOOAppleReceiverGetStatus(
     status->processedFrameCount = receiver->metrics.processedFrames.load(std::memory_order_relaxed);
     status->processErrorCount = receiver->metrics.processErrors.load(std::memory_order_relaxed);
     status->processBlockMismatchCount = receiver->metrics.processBlockMismatches.load(std::memory_order_relaxed);
+    status->processDeadlineMissCount = receiver->metrics.processDeadlineMisses.load(
+        std::memory_order_relaxed
+    );
     status->streamStartCount = receiver->metrics.streamStarts.load(std::memory_order_relaxed);
     status->streamActiveCount = receiver->metrics.streamActiveTransitions.load(std::memory_order_relaxed);
     status->streamBufferingCount = receiver->metrics.streamBufferingTransitions.load(std::memory_order_relaxed);
@@ -3031,6 +3085,24 @@ void AOOAppleReceiverGetStatus(
     if (AooSink_getRealSampleRate(receiver->sink, &realSampleRate) == kAooOk
         && std::isfinite(realSampleRate)) {
         status->realSampleRate = realSampleRate;
+    }
+    status->maximumProcessIntervalMilliseconds =
+        receiver->metrics.maximumProcessIntervalMilliseconds.load(
+            std::memory_order_relaxed
+        );
+    const int64_t cadenceStartNanoseconds =
+        receiver->metrics.cadenceStartNanoseconds.load(std::memory_order_relaxed);
+    const int64_t cadenceLastNanoseconds =
+        receiver->metrics.cadenceLastNanoseconds.load(std::memory_order_relaxed);
+    const uint64_t cadenceFrameCount =
+        receiver->metrics.cadenceFrameCount.load(std::memory_order_relaxed);
+    if (cadenceFrameCount > 0
+        && cadenceLastNanoseconds > cadenceStartNanoseconds) {
+        status->processCadenceSampleRate = static_cast<double>(cadenceFrameCount)
+            * 1.0e9
+            / static_cast<double>(
+                cadenceLastNanoseconds - cadenceStartNanoseconds
+            );
     }
     if (status->sourceChannelCount > 0) {
         status->bufferFillRatio = receiverBufferFillRatio(receiver);

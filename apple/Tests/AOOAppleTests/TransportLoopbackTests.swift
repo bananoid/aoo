@@ -39,6 +39,8 @@ struct TransportLoopbackTests {
         #expect(status.processBlockMismatchCount == 0)
         #expect(status.minimumProcessFrameCount == 64)
         #expect(status.maximumProcessFrameCount == 64)
+        #expect(status.maximumProcessIntervalMilliseconds >= 0)
+        #expect(status.processCadenceSampleRate >= 0)
         #expect(receiver.transportStatus.health == .stopped)
     }
 

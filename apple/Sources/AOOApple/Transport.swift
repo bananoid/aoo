@@ -485,6 +485,7 @@ public struct AOOReceiverStatus: Codable, Equatable, Sendable {
     public var processedFrameCount: UInt64
     public var processErrorCount: UInt64
     public var processBlockMismatchCount: UInt64
+    public var processDeadlineMissCount: UInt64
     public var streamStartCount: UInt64
     public var streamActiveCount: UInt64
     public var streamBufferingCount: UInt64
@@ -537,6 +538,8 @@ public struct AOOReceiverStatus: Codable, Equatable, Sendable {
     public var bufferedAudioMilliseconds: Double
     public var sourceRealSampleRate: Double
     public var realSampleRate: Double
+    public var maximumProcessIntervalMilliseconds: Double
+    public var processCadenceSampleRate: Double
 
     public init(
         isReady: Bool = false,
@@ -562,6 +565,7 @@ public struct AOOReceiverStatus: Codable, Equatable, Sendable {
         processedFrameCount: UInt64 = 0,
         processErrorCount: UInt64 = 0,
         processBlockMismatchCount: UInt64 = 0,
+        processDeadlineMissCount: UInt64 = 0,
         streamStartCount: UInt64 = 0,
         streamActiveCount: UInt64 = 0,
         streamBufferingCount: UInt64 = 0,
@@ -613,7 +617,9 @@ public struct AOOReceiverStatus: Codable, Equatable, Sendable {
         bufferFillRatio: Double = -1,
         bufferedAudioMilliseconds: Double = -1,
         sourceRealSampleRate: Double = 0,
-        realSampleRate: Double = 0
+        realSampleRate: Double = 0,
+        maximumProcessIntervalMilliseconds: Double = 0,
+        processCadenceSampleRate: Double = 0
     ) {
         self.isReady = isReady
         self.streamActive = streamActive
@@ -638,6 +644,7 @@ public struct AOOReceiverStatus: Codable, Equatable, Sendable {
         self.processedFrameCount = processedFrameCount
         self.processErrorCount = processErrorCount
         self.processBlockMismatchCount = processBlockMismatchCount
+        self.processDeadlineMissCount = processDeadlineMissCount
         self.streamStartCount = streamStartCount
         self.streamActiveCount = streamActiveCount
         self.streamBufferingCount = streamBufferingCount
@@ -690,6 +697,8 @@ public struct AOOReceiverStatus: Codable, Equatable, Sendable {
         self.bufferedAudioMilliseconds = bufferedAudioMilliseconds
         self.sourceRealSampleRate = sourceRealSampleRate
         self.realSampleRate = realSampleRate
+        self.maximumProcessIntervalMilliseconds = maximumProcessIntervalMilliseconds
+        self.processCadenceSampleRate = processCadenceSampleRate
     }
 
     public var isReceivingStream: Bool {
@@ -865,6 +874,7 @@ public final class AOOReceiver: @unchecked Sendable {
             processedFrameCount: raw.processedFrameCount,
             processErrorCount: raw.processErrorCount,
             processBlockMismatchCount: raw.processBlockMismatchCount,
+            processDeadlineMissCount: raw.processDeadlineMissCount,
             streamStartCount: raw.streamStartCount,
             streamActiveCount: raw.streamActiveCount,
             streamBufferingCount: raw.streamBufferingCount,
@@ -924,7 +934,9 @@ public final class AOOReceiver: @unchecked Sendable {
             bufferFillRatio: raw.bufferFillRatio,
             bufferedAudioMilliseconds: raw.bufferedAudioMilliseconds,
             sourceRealSampleRate: raw.sourceRealSampleRate,
-            realSampleRate: raw.realSampleRate
+            realSampleRate: raw.realSampleRate,
+            maximumProcessIntervalMilliseconds: raw.maximumProcessIntervalMilliseconds,
+            processCadenceSampleRate: raw.processCadenceSampleRate
         )
     }
 
