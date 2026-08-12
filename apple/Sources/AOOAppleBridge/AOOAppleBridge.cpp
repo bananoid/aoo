@@ -65,6 +65,12 @@ void configureNetworkThread() {
 #endif
 }
 
+void configureSenderProcessThread() {
+#if defined(__APPLE__)
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
+}
+
 int32_t clampedPort(int32_t port, int32_t fallback) {
     return port > 0 && port <= UINT16_MAX ? port : fallback;
 }
@@ -1418,11 +1424,19 @@ void startSenderProcessThread(AOOAppleSender *sender) {
     sender->streamGeneration.fetch_add(1, std::memory_order_acq_rel);
     sender->processThreadShouldRun.store(true, std::memory_order_release);
     sender->processThread = std::thread([sender] {
-        configureNetworkThread();
+        configureSenderProcessThread();
+        using clock = std::chrono::steady_clock;
         const auto blockDuration = std::chrono::duration<double>(
             static_cast<double>(sender->streamBlockSize) / sender->sampleRate
         );
-        auto nextDeadline = std::chrono::steady_clock::now();
+        const auto blockPeriod = std::chrono::duration_cast<clock::duration>(
+            blockDuration
+        );
+        const auto idlePollPeriod = std::chrono::duration_cast<clock::duration>(
+            blockDuration * 0.125
+        );
+        auto nextDeadline = clock::time_point{};
+        bool deadlineAnchored = false;
         while (sender->processThreadShouldRun.load(std::memory_order_acquire)) {
             const bool processedBlock = processNextSenderBlock(sender);
             if (!processedBlock) {
@@ -1430,15 +1444,22 @@ void startSenderProcessThread(AOOAppleSender *sender) {
                 if (result != kAooOk && result != kAooErrorWouldBlock) {
                     sender->metrics.lastError.store(result, std::memory_order_relaxed);
                 }
+                const auto now = clock::now();
+                if (deadlineAnchored && nextDeadline > now) {
+                    std::this_thread::sleep_until(nextDeadline);
+                } else {
+                    std::this_thread::sleep_for(idlePollPeriod);
+                }
+                continue;
             }
-            nextDeadline += std::chrono::duration_cast<
-                std::chrono::steady_clock::duration
-            >(blockDuration);
-            const auto now = std::chrono::steady_clock::now();
-            if (nextDeadline > now) {
-                std::this_thread::sleep_until(nextDeadline);
-            } else {
+            const auto now = clock::now();
+            if (!deadlineAnchored) {
                 nextDeadline = now;
+                deadlineAnchored = true;
+            }
+            nextDeadline += blockPeriod;
+            if (nextDeadline > clock::now()) {
+                std::this_thread::sleep_until(nextDeadline);
             }
         }
     });
