@@ -62,9 +62,9 @@ struct sendfn {
     sendfn(AooSendFunc fn = nullptr, void *user = nullptr)
         : fn_(fn), user_(user) {}
 
-    void operator() (const AooByte *data, AooInt32 size,
-                     const ip_address& addr, AooFlag flags = 0) const {
-        fn_(user_, data, size, addr.address(), addr.length(), flags);
+    AooInt32 operator() (const AooByte *data, AooInt32 size,
+                         const ip_address& addr, AooFlag flags = 0) const {
+        return fn_(user_, data, size, addr.address(), addr.length(), flags);
     }
 
     AooSendFunc fn() const { return fn_; }

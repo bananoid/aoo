@@ -14,6 +14,7 @@ extern "C" {
 
 typedef struct AooSource AooSource;
 typedef struct AooSink AooSink;
+typedef struct AooClient AooClient;
 
 typedef enum AooLowLatencyProfile {
     kAooLowLatencyProfileDeterministicWired = 1,
@@ -72,6 +73,16 @@ typedef struct AooLowLatencySinkStatistics {
     AooSeconds p99CompletionResidual;
 } AooLowLatencySinkStatistics;
 
+typedef struct AooLowLatencyClientSendStatistics {
+    AooUInt64 datagramAttemptCount;
+    AooUInt64 datagramSuccessCount;
+    AooUInt64 datagramFailureCount;
+    AooUInt64 attemptedByteCount;
+    AooUInt64 sentByteCount;
+    AooInt32 lastSendResult;
+    AooInt32 lastSocketError;
+} AooLowLatencyClientSendStatistics;
+
 /** Encode the fixed, network-byte-order low-latency packet header. */
 AOO_API AooError AOO_CALL aoo_lowLatencyPacketHeaderEncode(
     const AooLowLatencyPacketHeader *header,
@@ -128,6 +139,12 @@ AOO_API AooError AOO_CALL AooSink_getLowLatencyStatistics(
 AOO_API AooError AOO_CALL AooSink_setLowLatencyTarget(
     AooSink *sink,
     AooUInt32 targetLatencyFrames
+);
+
+/** Copy monotonic UDP send statistics without resetting them. */
+AOO_API AooError AOO_CALL AooClient_getLowLatencySendStatistics(
+    AooClient *client,
+    AooLowLatencyClientSendStatistics *statistics
 );
 
 #ifdef __cplusplus

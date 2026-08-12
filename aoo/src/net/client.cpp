@@ -260,6 +260,97 @@ AOO_API AooError AOO_CALL AooClient_send(
     return client->send(timeout);
 }
 
+AOO_API AooError AOO_CALL AooClient_getLowLatencySendStatistics(
+    AooClient *client,
+    AooLowLatencyClientSendStatistics *statistics
+) {
+    if (!client || !statistics) {
+        return kAooErrorBadArgument;
+    }
+    static_cast<aoo::net::Client *>(client)->getLowLatencySendStatistics(
+        *statistics
+    );
+    return kAooOk;
+}
+
+void aoo::net::Client::getLowLatencySendStatistics(
+    AooLowLatencyClientSendStatistics& statistics
+) const {
+    statistics.datagramAttemptCount = datagram_attempt_count_.load(
+        std::memory_order_relaxed
+    );
+    statistics.datagramSuccessCount = datagram_success_count_.load(
+        std::memory_order_relaxed
+    );
+    statistics.datagramFailureCount = datagram_failure_count_.load(
+        std::memory_order_relaxed
+    );
+    statistics.attemptedByteCount = attempted_byte_count_.load(
+        std::memory_order_relaxed
+    );
+    statistics.sentByteCount = sent_byte_count_.load(
+        std::memory_order_relaxed
+    );
+    statistics.lastSendResult = last_send_result_.load(
+        std::memory_order_relaxed
+    );
+    statistics.lastSocketError = last_socket_error_.load(
+        std::memory_order_relaxed
+    );
+}
+
+AooInt32 aoo::net::Client::trackedUdpSend(
+    void *user,
+    const AooByte *data,
+    AooInt32 size,
+    const void *address,
+    AooAddrSize addressLength,
+    AooFlag flags
+) {
+    return static_cast<Client *>(user)->sendUdpDatagram(
+        data, size, address, addressLength, flags
+    );
+}
+
+AooInt32 aoo::net::Client::sendUdpDatagram(
+    const AooByte *data,
+    AooInt32 size,
+    const void *address,
+    AooAddrSize addressLength,
+    AooFlag flags
+) {
+    datagram_attempt_count_.fetch_add(1, std::memory_order_relaxed);
+    attempted_byte_count_.fetch_add(
+        static_cast<AooUInt64>(std::max(size, 0)),
+        std::memory_order_relaxed
+    );
+    const ip_address destination(
+        static_cast<const sockaddr *>(address), addressLength
+    );
+    const AooInt32 result = udp_sendfn_(data, size, destination, flags);
+    last_send_result_.store(result, std::memory_order_relaxed);
+    if (result == size) {
+        datagram_success_count_.fetch_add(1, std::memory_order_relaxed);
+        sent_byte_count_.fetch_add(
+            static_cast<AooUInt64>(result),
+            std::memory_order_relaxed
+        );
+    } else {
+        datagram_failure_count_.fetch_add(1, std::memory_order_relaxed);
+        last_socket_error_.store(
+            result < 0 ? socket::get_last_error() : 0,
+            std::memory_order_relaxed
+        );
+        if (result > 0) {
+            sent_byte_count_.fetch_add(
+                static_cast<AooUInt64>(result),
+                std::memory_order_relaxed
+            );
+        }
+    }
+    return result;
+}
+
 AooError AOO_CALL aoo::net::Client::send(AooSeconds timeout)
 {
     constexpr double interval = 0.1;
@@ -268,9 +359,9 @@ AooError AOO_CALL aoo::net::Client::send(AooSeconds timeout)
         auto now = time_tag::now();
 
     #if AOO_CLIENT_SIMULATE
-        auto reply = simulate_.wrap(udp_sendfn_, now);
+        auto reply = simulate_.wrap(sendfn(trackedUdpSend, this), now);
     #else
-        auto reply = udp_sendfn_;
+        auto reply = sendfn(trackedUdpSend, this);
     #endif
 
         // send sources and sinks

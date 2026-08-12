@@ -2208,6 +2208,19 @@ void AOOAppleSenderGetStatus(
     status->sinkRemoveEventCount = sender->metrics.sinkRemoveEvents.load(
         std::memory_order_relaxed
     );
+    AooLowLatencyClientSendStatistics sendStatistics{};
+    if (AooClient_getLowLatencySendStatistics(
+            sender->client,
+            &sendStatistics
+        ) == kAooOk) {
+        status->datagramAttemptCount = sendStatistics.datagramAttemptCount;
+        status->datagramSuccessCount = sendStatistics.datagramSuccessCount;
+        status->datagramFailureCount = sendStatistics.datagramFailureCount;
+        status->attemptedDatagramByteCount = sendStatistics.attemptedByteCount;
+        status->sentDatagramByteCount = sendStatistics.sentByteCount;
+        status->lastDatagramSendResult = sendStatistics.lastSendResult;
+        status->lastDatagramSocketError = sendStatistics.lastSocketError;
+    }
     status->handoffLatencyMilliseconds = sender->metrics.handoffLatencyMilliseconds.load(std::memory_order_relaxed);
     status->maximumHandoffLatencyMilliseconds = sender->metrics.maximumHandoffLatencyMilliseconds.load(std::memory_order_relaxed);
     status->maximumProcessIntervalMilliseconds =

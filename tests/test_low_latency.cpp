@@ -1,4 +1,5 @@
 #include "aoo_low_latency.h"
+#include "aoo_client.h"
 
 #include <array>
 #include <cstring>
@@ -40,6 +41,18 @@ AooLowLatencyStreamConfiguration make_configuration(AooByte profile) {
 } // namespace
 
 int main() {
+    AooLowLatencyClientSendStatistics sendStatistics{};
+    CHECK(AooClient_getLowLatencySendStatistics(nullptr, &sendStatistics)
+        == kAooErrorBadArgument);
+    auto client = AooClient_new();
+    CHECK(client != nullptr);
+    CHECK(AooClient_getLowLatencySendStatistics(client, &sendStatistics)
+        == kAooOk);
+    CHECK(sendStatistics.datagramAttemptCount == 0);
+    CHECK(sendStatistics.datagramSuccessCount == 0);
+    CHECK(sendStatistics.datagramFailureCount == 0);
+    AooClient_free(client);
+
     AooLowLatencyPacketHeader expected{};
     expected.protocolVersion = AOO_LOW_LATENCY_PROTOCOL_VERSION;
     expected.headerSize = AOO_LOW_LATENCY_PACKET_HEADER_SIZE;

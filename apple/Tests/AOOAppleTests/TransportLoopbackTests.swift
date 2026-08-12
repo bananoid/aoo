@@ -114,6 +114,12 @@ struct TransportLoopbackTests {
         #expect(sender.status.handoffDropCount == 0)
         #expect(sender.status.processErrorCount == 0)
         #expect(sender.status.maximumProcessIntervalMilliseconds > 0)
+        #expect(sender.status.datagramAttemptCount > 0)
+        #expect(sender.status.datagramSuccessCount > 0)
+        #expect(sender.status.datagramFailureCount == 0)
+        #expect(sender.status.attemptedDatagramByteCount >= sender.status.sentDatagramByteCount)
+        #expect(sender.status.lastDatagramSendResult > 0)
+        #expect(sender.status.lastDatagramSocketError == 0)
         #expect(receiver.status.processErrorCount == 0)
         #expect(throws: AOOTransportError.self) {
             try receiver.setLatency(milliseconds: 8)

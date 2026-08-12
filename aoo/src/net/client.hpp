@@ -5,6 +5,7 @@
 #pragma once
 
 #include "aoo_client.hpp"
+#include "aoo_low_latency.h"
 
 #include "osc_stream_receiver.hpp"
 #include "udp_server.hpp"
@@ -320,6 +321,10 @@ public:
     AooError AOO_CALL control(
             AooCtl ctl, intptr_t index, void *ptr, size_t size) override;
 
+    void getLowLatencySendStatistics(
+        AooLowLatencyClientSendStatistics& statistics
+    ) const;
+
     //---------------------------------------------------------------------//
 
     bool handle_peer_osc_message(const osc::ReceivedMessage& msg, int onset,
@@ -383,6 +388,23 @@ public:
 
     void push_command(command_ptr cmd);
 
+    static AooInt32 trackedUdpSend(
+        void *user,
+        const AooByte *data,
+        AooInt32 size,
+        const void *address,
+        AooAddrSize addressLength,
+        AooFlag flags
+    );
+
+    AooInt32 sendUdpDatagram(
+        const AooByte *data,
+        AooInt32 size,
+        const void *address,
+        AooAddrSize addressLength,
+        AooFlag flags
+    );
+
     client_state current_state() const { return state_.load(); }
 private:
     // networking
@@ -391,6 +413,13 @@ private:
     udp_socket event_socket_;
     std::atomic<bool> quit_{false};
     sendfn udp_sendfn_;
+    std::atomic<AooUInt64> datagram_attempt_count_{0};
+    std::atomic<AooUInt64> datagram_success_count_{0};
+    std::atomic<AooUInt64> datagram_failure_count_{0};
+    std::atomic<AooUInt64> attempted_byte_count_{0};
+    std::atomic<AooUInt64> sent_byte_count_{0};
+    std::atomic<AooInt32> last_send_result_{0};
+    std::atomic<AooInt32> last_socket_error_{0};
     AooReceiveFunc message_handler_ = nullptr;
     void *user_data_ = nullptr;
     osc_stream_receiver receiver_;
@@ -768,7 +797,9 @@ public:
         }
 
         void perform(Client& c) override {
-            c.udp_sendfn_(data_, size_, addr_);
+            c.sendUdpDatagram(
+                data_, size_, addr_.address(), addr_.length(), 0
+            );
         }
     private:
         ip_address addr_;

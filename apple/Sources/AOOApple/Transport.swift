@@ -79,6 +79,13 @@ public struct AOOSenderStatus: Codable, Equatable, Sendable {
     public var inviteEventCount: UInt64
     public var uninviteEventCount: UInt64
     public var sinkRemoveEventCount: UInt64
+    public var datagramAttemptCount: UInt64
+    public var datagramSuccessCount: UInt64
+    public var datagramFailureCount: UInt64
+    public var attemptedDatagramByteCount: UInt64
+    public var sentDatagramByteCount: UInt64
+    public var lastDatagramSendResult: Int32
+    public var lastDatagramSocketError: Int32
     public var handoffLatencyMilliseconds: Double
     public var maximumHandoffLatencyMilliseconds: Double
     public var maximumProcessIntervalMilliseconds: Double
@@ -112,6 +119,13 @@ public struct AOOSenderStatus: Codable, Equatable, Sendable {
         inviteEventCount: UInt64 = 0,
         uninviteEventCount: UInt64 = 0,
         sinkRemoveEventCount: UInt64 = 0,
+        datagramAttemptCount: UInt64 = 0,
+        datagramSuccessCount: UInt64 = 0,
+        datagramFailureCount: UInt64 = 0,
+        attemptedDatagramByteCount: UInt64 = 0,
+        sentDatagramByteCount: UInt64 = 0,
+        lastDatagramSendResult: Int32 = 0,
+        lastDatagramSocketError: Int32 = 0,
         handoffLatencyMilliseconds: Double = 0,
         maximumHandoffLatencyMilliseconds: Double = 0,
         maximumProcessIntervalMilliseconds: Double = 0,
@@ -144,6 +158,13 @@ public struct AOOSenderStatus: Codable, Equatable, Sendable {
         self.inviteEventCount = inviteEventCount
         self.uninviteEventCount = uninviteEventCount
         self.sinkRemoveEventCount = sinkRemoveEventCount
+        self.datagramAttemptCount = datagramAttemptCount
+        self.datagramSuccessCount = datagramSuccessCount
+        self.datagramFailureCount = datagramFailureCount
+        self.attemptedDatagramByteCount = attemptedDatagramByteCount
+        self.sentDatagramByteCount = sentDatagramByteCount
+        self.lastDatagramSendResult = lastDatagramSendResult
+        self.lastDatagramSocketError = lastDatagramSocketError
         self.handoffLatencyMilliseconds = handoffLatencyMilliseconds
         self.maximumHandoffLatencyMilliseconds = maximumHandoffLatencyMilliseconds
         self.maximumProcessIntervalMilliseconds = maximumProcessIntervalMilliseconds
@@ -374,6 +395,13 @@ public final class AOOSender: @unchecked Sendable {
             inviteEventCount: raw.inviteEventCount,
             uninviteEventCount: raw.uninviteEventCount,
             sinkRemoveEventCount: raw.sinkRemoveEventCount,
+            datagramAttemptCount: raw.datagramAttemptCount,
+            datagramSuccessCount: raw.datagramSuccessCount,
+            datagramFailureCount: raw.datagramFailureCount,
+            attemptedDatagramByteCount: raw.attemptedDatagramByteCount,
+            sentDatagramByteCount: raw.sentDatagramByteCount,
+            lastDatagramSendResult: raw.lastDatagramSendResult,
+            lastDatagramSocketError: raw.lastDatagramSocketError,
             handoffLatencyMilliseconds: raw.handoffLatencyMilliseconds,
             maximumHandoffLatencyMilliseconds: raw.maximumHandoffLatencyMilliseconds,
             maximumProcessIntervalMilliseconds: raw.maximumProcessIntervalMilliseconds,

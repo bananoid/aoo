@@ -44,6 +44,13 @@ typedef struct AOOAppleSenderStatus {
     uint64_t inviteEventCount;
     uint64_t uninviteEventCount;
     uint64_t sinkRemoveEventCount;
+    uint64_t datagramAttemptCount;
+    uint64_t datagramSuccessCount;
+    uint64_t datagramFailureCount;
+    uint64_t attemptedDatagramByteCount;
+    uint64_t sentDatagramByteCount;
+    int32_t lastDatagramSendResult;
+    int32_t lastDatagramSocketError;
     double handoffLatencyMilliseconds;
     double maximumHandoffLatencyMilliseconds;
     double maximumProcessIntervalMilliseconds;
