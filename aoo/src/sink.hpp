@@ -471,6 +471,7 @@ private:
     mutable std::atomic<int64_t> low_latency_last_datagram_time_ns_{0};
     mutable std::atomic<int64_t> low_latency_latest_datagram_gap_ns_{0};
     mutable std::atomic<int64_t> low_latency_maximum_datagram_gap_ns_{0};
+    mutable std::atomic<AooSampleRate> low_latency_latest_source_samplerate_{0};
     std::atomic<AooUInt32> low_latency_target_frames_{0};
 
     // events

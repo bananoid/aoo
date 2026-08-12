@@ -54,6 +54,7 @@ typedef struct AOOAppleSenderStatus {
     double handoffLatencyMilliseconds;
     double maximumHandoffLatencyMilliseconds;
     double maximumProcessIntervalMilliseconds;
+    double processCadenceSampleRate;
     double sourcePresentationLeadMilliseconds;
     double roundTripMilliseconds;
     double packetLoss;
@@ -126,6 +127,7 @@ typedef struct AOOAppleReceiverStatus {
     double bufferCapacityMilliseconds;
     double bufferFillRatio;
     double bufferedAudioMilliseconds;
+    double sourceRealSampleRate;
     double realSampleRate;
 } AOOAppleReceiverStatus;
 

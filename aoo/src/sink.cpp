@@ -682,6 +682,12 @@ void aoo::Sink::observe_low_latency_completion(const net_packet& packet) const {
     if (!(packet.flags & kAooBinMsgDataLowLatency)) {
         return;
     }
+    if (std::isfinite(packet.samplerate) && packet.samplerate > 0) {
+        low_latency_latest_source_samplerate_.store(
+            packet.samplerate,
+            std::memory_order_relaxed
+        );
+    }
     record_low_latency_observation(
         packet,
         low_latency_completions_,
@@ -729,6 +735,8 @@ AooError aoo::Sink::get_low_latency_statistics(
     statistics.maximumDatagramGap = static_cast<double>(
         low_latency_maximum_datagram_gap_ns_.load(std::memory_order_relaxed)
     ) * 1.0e-9;
+    statistics.latestSourceSampleRate =
+        low_latency_latest_source_samplerate_.load(std::memory_order_relaxed);
     return kAooOk;
 }
 

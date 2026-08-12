@@ -101,6 +101,7 @@ public struct AOOSenderStatus: Codable, Equatable, Sendable {
     public var handoffLatencyMilliseconds: Double
     public var maximumHandoffLatencyMilliseconds: Double
     public var maximumProcessIntervalMilliseconds: Double
+    public var processCadenceSampleRate: Double
     public var sourcePresentationLeadMilliseconds: Double
     public var roundTripMilliseconds: Double
     public var packetLoss: Double
@@ -141,6 +142,7 @@ public struct AOOSenderStatus: Codable, Equatable, Sendable {
         handoffLatencyMilliseconds: Double = 0,
         maximumHandoffLatencyMilliseconds: Double = 0,
         maximumProcessIntervalMilliseconds: Double = 0,
+        processCadenceSampleRate: Double = 0,
         sourcePresentationLeadMilliseconds: Double = 0,
         roundTripMilliseconds: Double = 0,
         packetLoss: Double = 0,
@@ -180,6 +182,7 @@ public struct AOOSenderStatus: Codable, Equatable, Sendable {
         self.handoffLatencyMilliseconds = handoffLatencyMilliseconds
         self.maximumHandoffLatencyMilliseconds = maximumHandoffLatencyMilliseconds
         self.maximumProcessIntervalMilliseconds = maximumProcessIntervalMilliseconds
+        self.processCadenceSampleRate = processCadenceSampleRate
         self.sourcePresentationLeadMilliseconds = sourcePresentationLeadMilliseconds
         self.roundTripMilliseconds = roundTripMilliseconds
         self.packetLoss = packetLoss
@@ -417,6 +420,7 @@ public final class AOOSender: @unchecked Sendable {
             handoffLatencyMilliseconds: raw.handoffLatencyMilliseconds,
             maximumHandoffLatencyMilliseconds: raw.maximumHandoffLatencyMilliseconds,
             maximumProcessIntervalMilliseconds: raw.maximumProcessIntervalMilliseconds,
+            processCadenceSampleRate: raw.processCadenceSampleRate,
             sourcePresentationLeadMilliseconds: raw.sourcePresentationLeadMilliseconds,
             roundTripMilliseconds: raw.roundTripMilliseconds,
             packetLoss: raw.packetLoss,
@@ -531,6 +535,7 @@ public struct AOOReceiverStatus: Codable, Equatable, Sendable {
     public var bufferCapacityMilliseconds: Double
     public var bufferFillRatio: Double
     public var bufferedAudioMilliseconds: Double
+    public var sourceRealSampleRate: Double
     public var realSampleRate: Double
 
     public init(
@@ -607,6 +612,7 @@ public struct AOOReceiverStatus: Codable, Equatable, Sendable {
         bufferCapacityMilliseconds: Double = 0,
         bufferFillRatio: Double = -1,
         bufferedAudioMilliseconds: Double = -1,
+        sourceRealSampleRate: Double = 0,
         realSampleRate: Double = 0
     ) {
         self.isReady = isReady
@@ -682,6 +688,7 @@ public struct AOOReceiverStatus: Codable, Equatable, Sendable {
         self.bufferCapacityMilliseconds = bufferCapacityMilliseconds
         self.bufferFillRatio = bufferFillRatio
         self.bufferedAudioMilliseconds = bufferedAudioMilliseconds
+        self.sourceRealSampleRate = sourceRealSampleRate
         self.realSampleRate = realSampleRate
     }
 
@@ -916,6 +923,7 @@ public final class AOOReceiver: @unchecked Sendable {
             bufferCapacityMilliseconds: raw.bufferCapacityMilliseconds,
             bufferFillRatio: raw.bufferFillRatio,
             bufferedAudioMilliseconds: raw.bufferedAudioMilliseconds,
+            sourceRealSampleRate: raw.sourceRealSampleRate,
             realSampleRate: raw.realSampleRate
         )
     }

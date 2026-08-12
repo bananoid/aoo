@@ -125,9 +125,11 @@ The public API reports handoff drops, UDP datagram attempts and failures, late
 packets, concealments, resends, reacquisitions, underruns, overruns, arrival
 residuals, receive-datagram gaps, stale fragments, incomplete blocks, trimmed
 backlog, clock drift, buffer fill, target latency, and timestamp-derived
-presentation latency. Applications should validate these metrics on their
-target hardware and network; the default targets are starting points, not
-latency guarantees.
+presentation latency. Sender worker cadence and the latest source sample rate
+seen by the receiver are reported separately so applications can diagnose
+clock-rate propagation without inferring it from buffer fill. Applications
+should validate these metrics on their target hardware and network; the
+default targets are starting points, not latency guarantees.
 
 ## Build And Test
 

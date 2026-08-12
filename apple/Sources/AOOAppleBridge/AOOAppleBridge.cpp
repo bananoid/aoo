@@ -293,6 +293,9 @@ struct SenderMetrics {
     std::atomic<uint64_t> uninviteEvents{0};
     std::atomic<uint64_t> sinkRemoveEvents{0};
     std::atomic<int64_t> lastProcessNanoseconds{0};
+    std::atomic<int64_t> cadenceStartNanoseconds{0};
+    std::atomic<int64_t> cadenceLastNanoseconds{0};
+    std::atomic<uint64_t> cadenceBlockCount{0};
     std::atomic<double> handoffLatencyMilliseconds{0};
     std::atomic<double> maximumHandoffLatencyMilliseconds{0};
     std::atomic<double> maximumProcessIntervalMilliseconds{0};
@@ -1548,6 +1551,18 @@ bool processNextSenderBlock(AOOAppleSender *sender) {
             }
         }
         const int64_t processNanoseconds = monotonicNanoseconds();
+        int64_t unsetCadenceStart = 0;
+        sender->metrics.cadenceStartNanoseconds.compare_exchange_strong(
+            unsetCadenceStart,
+            processNanoseconds,
+            std::memory_order_relaxed,
+            std::memory_order_relaxed
+        );
+        sender->metrics.cadenceLastNanoseconds.store(
+            processNanoseconds,
+            std::memory_order_relaxed
+        );
+        sender->metrics.cadenceBlockCount.fetch_add(1, std::memory_order_relaxed);
         const int64_t previousProcessNanoseconds =
             sender->metrics.lastProcessNanoseconds.exchange(
                 processNanoseconds,
@@ -1624,6 +1639,9 @@ void startSenderProcessThread(AOOAppleSender *sender) {
         std::memory_order_release
     );
     sender->streamGeneration.fetch_add(1, std::memory_order_acq_rel);
+    sender->metrics.cadenceStartNanoseconds.store(0, std::memory_order_relaxed);
+    sender->metrics.cadenceLastNanoseconds.store(0, std::memory_order_relaxed);
+    sender->metrics.cadenceBlockCount.store(0, std::memory_order_relaxed);
     sender->processThreadShouldRun.store(true, std::memory_order_release);
     sender->processThread = std::thread([sender] {
         configureSenderProcessThread();
@@ -2348,6 +2366,21 @@ void AOOAppleSenderGetStatus(
         sender->metrics.maximumProcessIntervalMilliseconds.load(
             std::memory_order_relaxed
         );
+    const int64_t cadenceStartNanoseconds =
+        sender->metrics.cadenceStartNanoseconds.load(std::memory_order_relaxed);
+    const int64_t cadenceLastNanoseconds =
+        sender->metrics.cadenceLastNanoseconds.load(std::memory_order_relaxed);
+    const uint64_t cadenceBlockCount =
+        sender->metrics.cadenceBlockCount.load(std::memory_order_relaxed);
+    if (cadenceBlockCount > 1
+        && cadenceLastNanoseconds > cadenceStartNanoseconds) {
+        status->processCadenceSampleRate =
+            static_cast<double>((cadenceBlockCount - 1)
+                * static_cast<uint64_t>(sender->streamBlockSize))
+            / (static_cast<double>(
+                cadenceLastNanoseconds - cadenceStartNanoseconds
+            ) * 1.0e-9);
+    }
     status->sourcePresentationLeadMilliseconds = sender->metrics.sourcePresentationLeadMilliseconds.load(std::memory_order_relaxed);
     status->roundTripMilliseconds = sender->metrics.roundTripMilliseconds.load(std::memory_order_relaxed);
     status->packetLoss = sender->metrics.packetLoss.load(std::memory_order_relaxed);
@@ -2980,6 +3013,8 @@ void AOOAppleReceiverGetStatus(
             lowLatencyStatistics.latestDatagramGap * 1000.0;
         status->maximumDatagramGapMilliseconds =
             lowLatencyStatistics.maximumDatagramGap * 1000.0;
+        status->sourceRealSampleRate =
+            lowLatencyStatistics.latestSourceSampleRate;
     }
     status->targetLatencyMilliseconds = receiver->targetLatencySeconds.load(
         std::memory_order_acquire
