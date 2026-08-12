@@ -110,6 +110,7 @@ struct TransportLoopbackTests {
         #expect(receiver.status.sourceChannelCount == 2)
         #expect(receiver.status.profile == .deterministicWired)
         #expect(receiver.status.format == .float32)
+        #expect(receiver.status.completionObservationCount > 0)
         #expect(sender.status.handoffDropCount == 0)
         #expect(sender.status.processErrorCount == 0)
         #expect(receiver.status.processErrorCount == 0)

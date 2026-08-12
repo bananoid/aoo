@@ -1205,7 +1205,10 @@ void startReceiverAdaptiveThread(AOOAppleReceiver *receiver) {
 
                 const double jitterMilliseconds = std::max(
                     0.0,
-                    statistics.p99ArrivalResidual * 1000.0
+                    std::max(
+                        statistics.p99ArrivalResidual,
+                        statistics.p99CompletionResidual
+                    ) * 1000.0
                 );
                 const double currentTarget = receiver->targetLatencySeconds.load(
                     std::memory_order_acquire
@@ -2778,10 +2781,16 @@ void AOOAppleReceiverGetStatus(
         ) == kAooOk) {
         status->arrivalObservationCount =
             lowLatencyStatistics.arrivalObservationCount;
+        status->completionObservationCount =
+            lowLatencyStatistics.completionObservationCount;
         status->latestArrivalResidualMilliseconds =
             lowLatencyStatistics.latestArrivalResidual * 1000.0;
         status->p99ArrivalResidualMilliseconds =
             lowLatencyStatistics.p99ArrivalResidual * 1000.0;
+        status->latestCompletionResidualMilliseconds =
+            lowLatencyStatistics.latestCompletionResidual * 1000.0;
+        status->p99CompletionResidualMilliseconds =
+            lowLatencyStatistics.p99CompletionResidual * 1000.0;
     }
     status->targetLatencyMilliseconds = receiver->targetLatencySeconds.load(
         std::memory_order_acquire

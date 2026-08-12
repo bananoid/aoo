@@ -539,19 +539,26 @@ AOO_API AooError AOO_CALL AooSink_setLowLatencyTarget(
     return kAooOk;
 }
 
-void aoo::Sink::observe_low_latency_arrival(const net_packet& packet) {
-    if (!(packet.flags & kAooBinMsgDataLowLatency)
-        || packet.frame_index != 0 || packet.source_timestamp == 0) {
+namespace {
+
+template <size_t Capacity>
+void record_low_latency_observation(
+        const aoo::net_packet& packet,
+        std::array<std::atomic<int64_t>, Capacity>& observations,
+        std::atomic<uint64_t>& write_index,
+        std::atomic<uint64_t>& count,
+        std::atomic<int32_t>& stream_id) {
+    if (packet.source_timestamp == 0) {
         return;
     }
-    if (packet.stream_id != low_latency_arrival_stream_id_) {
-        low_latency_arrival_stream_id_ = packet.stream_id;
-        low_latency_arrival_write_index_.store(0, std::memory_order_release);
-        low_latency_arrival_count_.store(0, std::memory_order_release);
+    if (packet.stream_id != stream_id.load(std::memory_order_acquire)) {
+        stream_id.store(packet.stream_id, std::memory_order_release);
+        write_index.store(0, std::memory_order_release);
+        count.store(0, std::memory_order_release);
     }
-    const double transit = time_tag::duration(
-        time_tag(packet.source_timestamp),
-        time_tag::now()
+    const double transit = aoo::time_tag::duration(
+        aoo::time_tag(packet.source_timestamp),
+        aoo::time_tag::now()
     );
     if (!std::isfinite(transit)) {
         return;
@@ -561,42 +568,37 @@ void aoo::Sink::observe_low_latency_arrival(const net_packet& packet) {
         static_cast<double>(INT64_MIN),
         static_cast<double>(INT64_MAX)
     ));
-    const uint64_t writeIndex = low_latency_arrival_write_index_.load(
-        std::memory_order_relaxed
-    );
-    low_latency_arrivals_[writeIndex % low_latency_arrival_capacity_].store(
+    const uint64_t writeIndex = write_index.load(std::memory_order_relaxed);
+    observations[writeIndex % Capacity].store(
         nanoseconds,
         std::memory_order_relaxed
     );
-    low_latency_arrival_write_index_.store(
-        writeIndex + 1,
-        std::memory_order_release
-    );
-    low_latency_arrival_count_.store(
-        std::min(writeIndex + 1, low_latency_arrival_capacity_),
-        std::memory_order_release
-    );
+    write_index.store(writeIndex + 1, std::memory_order_release);
+    count.store(std::min<uint64_t>(writeIndex + 1, Capacity), std::memory_order_release);
 }
 
-AooError aoo::Sink::get_low_latency_statistics(
-        AooLowLatencySinkStatistics& statistics) const {
-    statistics = {};
-    const uint64_t writeIndex = low_latency_arrival_write_index_.load(
-        std::memory_order_acquire
-    );
+template <size_t Capacity>
+void summarize_low_latency_observations(
+        const std::array<std::atomic<int64_t>, Capacity>& observations,
+        const std::atomic<uint64_t>& write_index,
+        const std::atomic<uint64_t>& observation_count,
+        AooUInt64& total_count,
+        AooSeconds& latest_residual,
+        AooSeconds& p99_residual) {
+    const uint64_t writeIndex = write_index.load(std::memory_order_acquire);
     const uint64_t count = std::min(
-        low_latency_arrival_count_.load(std::memory_order_acquire),
-        low_latency_arrival_capacity_
+        observation_count.load(std::memory_order_acquire),
+        static_cast<uint64_t>(Capacity)
     );
-    statistics.arrivalObservationCount = writeIndex;
+    total_count = writeIndex;
     if (count == 0 || writeIndex == 0) {
-        return kAooOk;
+        return;
     }
-    std::array<int64_t, low_latency_arrival_capacity_> values{};
+    std::array<int64_t, Capacity> values{};
     const uint64_t first = writeIndex - count;
     for (uint64_t index = 0; index < count; ++index) {
-        values[index] = low_latency_arrivals_[
-            (first + index) % low_latency_arrival_capacity_
+        values[index] = observations[
+            (first + index) % Capacity
         ].load(std::memory_order_relaxed);
     }
     const int64_t baseline = *std::min_element(
@@ -613,10 +615,57 @@ AooError aoo::Sink::get_low_latency_statistics(
         values.begin() + count
     );
     const int64_t p99 = values[percentileIndex];
-    statistics.latestArrivalResidual = std::max<int64_t>(0, latest - baseline)
-        * 1.0e-9;
-    statistics.p99ArrivalResidual = std::max<int64_t>(0, p99 - baseline)
-        * 1.0e-9;
+    latest_residual = std::max<int64_t>(0, latest - baseline) * 1.0e-9;
+    p99_residual = std::max<int64_t>(0, p99 - baseline) * 1.0e-9;
+}
+
+} // namespace
+
+void aoo::Sink::observe_low_latency_arrival(const net_packet& packet) {
+    if (!(packet.flags & kAooBinMsgDataLowLatency) || packet.frame_index != 0) {
+        return;
+    }
+    record_low_latency_observation(
+        packet,
+        low_latency_arrivals_,
+        low_latency_arrival_write_index_,
+        low_latency_arrival_count_,
+        low_latency_arrival_stream_id_
+    );
+}
+
+void aoo::Sink::observe_low_latency_completion(const net_packet& packet) const {
+    if (!(packet.flags & kAooBinMsgDataLowLatency)) {
+        return;
+    }
+    record_low_latency_observation(
+        packet,
+        low_latency_completions_,
+        low_latency_completion_write_index_,
+        low_latency_completion_count_,
+        low_latency_completion_stream_id_
+    );
+}
+
+AooError aoo::Sink::get_low_latency_statistics(
+        AooLowLatencySinkStatistics& statistics) const {
+    statistics = {};
+    summarize_low_latency_observations(
+        low_latency_arrivals_,
+        low_latency_arrival_write_index_,
+        low_latency_arrival_count_,
+        statistics.arrivalObservationCount,
+        statistics.latestArrivalResidual,
+        statistics.p99ArrivalResidual
+    );
+    summarize_low_latency_observations(
+        low_latency_completions_,
+        low_latency_completion_write_index_,
+        low_latency_completion_count_,
+        statistics.completionObservationCount,
+        statistics.latestCompletionResidual,
+        statistics.p99CompletionResidual
+    );
     return kAooOk;
 }
 
@@ -2537,6 +2586,9 @@ bool source_desc::add_packet(const Sink& s, const net_packet& d,
     // add frame to block (if not empty)
     if (d.size > 0) {
         block->add_frame(d.frame_index, d.frame);
+    }
+    if (block->complete()) {
+        s.observe_low_latency_completion(d);
     }
 
     return true;

@@ -359,6 +359,7 @@ public:
             AooIntPtr index, void *data, AooSize size) override;
 
     void observe_low_latency_arrival(const net_packet& packet);
+    void observe_low_latency_completion(const net_packet& packet) const;
     AooError get_low_latency_statistics(
         AooLowLatencySinkStatistics& statistics
     ) const;
@@ -452,7 +453,14 @@ private:
         low_latency_arrivals_{};
     std::atomic<uint64_t> low_latency_arrival_write_index_{0};
     std::atomic<uint64_t> low_latency_arrival_count_{0};
-    int32_t low_latency_arrival_stream_id_ = kAooIdInvalid;
+    std::atomic<int32_t> low_latency_arrival_stream_id_{kAooIdInvalid};
+    mutable std::array<std::atomic<int64_t>, low_latency_arrival_capacity_>
+        low_latency_completions_{};
+    mutable std::atomic<uint64_t> low_latency_completion_write_index_{0};
+    mutable std::atomic<uint64_t> low_latency_completion_count_{0};
+    mutable std::atomic<int32_t> low_latency_completion_stream_id_{
+        kAooIdInvalid
+    };
     std::atomic<AooUInt32> low_latency_target_frames_{0};
 
     // events

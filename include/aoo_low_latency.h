@@ -67,6 +67,9 @@ typedef struct AooLowLatencySinkStatistics {
     AooUInt64 arrivalObservationCount;
     AooSeconds latestArrivalResidual;
     AooSeconds p99ArrivalResidual;
+    AooUInt64 completionObservationCount;
+    AooSeconds latestCompletionResidual;
+    AooSeconds p99CompletionResidual;
 } AooLowLatencySinkStatistics;
 
 /** Encode the fixed, network-byte-order low-latency packet header. */

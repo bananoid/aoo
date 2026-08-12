@@ -431,6 +431,7 @@ public struct AOOReceiverStatus: Codable, Equatable, Sendable {
     public var incompatibleStreamCount: UInt64
     public var adaptiveAdjustmentCount: UInt64
     public var arrivalObservationCount: UInt64
+    public var completionObservationCount: UInt64
     public var sourceSamplePosition: UInt64
     public var timestampPingCount: UInt64
     public var aooStreamTimeSampleCount: UInt64
@@ -453,6 +454,8 @@ public struct AOOReceiverStatus: Codable, Equatable, Sendable {
     public var outputPresentationLatencyMilliseconds: Double
     public var latestArrivalResidualMilliseconds: Double
     public var p99ArrivalResidualMilliseconds: Double
+    public var latestCompletionResidualMilliseconds: Double
+    public var p99CompletionResidualMilliseconds: Double
     public var estimatedPresentationToPresentationLatencyMilliseconds: Double?
     public var targetLatencyMilliseconds: Double
     public var bufferCapacityMilliseconds: Double
@@ -498,6 +501,7 @@ public struct AOOReceiverStatus: Codable, Equatable, Sendable {
         incompatibleStreamCount: UInt64 = 0,
         adaptiveAdjustmentCount: UInt64 = 0,
         arrivalObservationCount: UInt64 = 0,
+        completionObservationCount: UInt64 = 0,
         sourceSamplePosition: UInt64 = 0,
         timestampPingCount: UInt64 = 0,
         aooStreamTimeSampleCount: UInt64 = 0,
@@ -520,6 +524,8 @@ public struct AOOReceiverStatus: Codable, Equatable, Sendable {
         outputPresentationLatencyMilliseconds: Double = 0,
         latestArrivalResidualMilliseconds: Double = 0,
         p99ArrivalResidualMilliseconds: Double = 0,
+        latestCompletionResidualMilliseconds: Double = 0,
+        p99CompletionResidualMilliseconds: Double = 0,
         estimatedPresentationToPresentationLatencyMilliseconds: Double? = nil,
         targetLatencyMilliseconds: Double = 0,
         bufferCapacityMilliseconds: Double = 0,
@@ -564,6 +570,7 @@ public struct AOOReceiverStatus: Codable, Equatable, Sendable {
         self.incompatibleStreamCount = incompatibleStreamCount
         self.adaptiveAdjustmentCount = adaptiveAdjustmentCount
         self.arrivalObservationCount = arrivalObservationCount
+        self.completionObservationCount = completionObservationCount
         self.sourceSamplePosition = sourceSamplePosition
         self.timestampPingCount = timestampPingCount
         self.aooStreamTimeSampleCount = aooStreamTimeSampleCount
@@ -586,6 +593,8 @@ public struct AOOReceiverStatus: Codable, Equatable, Sendable {
         self.outputPresentationLatencyMilliseconds = outputPresentationLatencyMilliseconds
         self.latestArrivalResidualMilliseconds = latestArrivalResidualMilliseconds
         self.p99ArrivalResidualMilliseconds = p99ArrivalResidualMilliseconds
+        self.latestCompletionResidualMilliseconds = latestCompletionResidualMilliseconds
+        self.p99CompletionResidualMilliseconds = p99CompletionResidualMilliseconds
         self.estimatedPresentationToPresentationLatencyMilliseconds = estimatedPresentationToPresentationLatencyMilliseconds
         self.targetLatencyMilliseconds = targetLatencyMilliseconds
         self.bufferCapacityMilliseconds = bufferCapacityMilliseconds
@@ -776,6 +785,7 @@ public final class AOOReceiver: @unchecked Sendable {
             incompatibleStreamCount: raw.incompatibleStreamCount,
             adaptiveAdjustmentCount: raw.adaptiveAdjustmentCount,
             arrivalObservationCount: raw.arrivalObservationCount,
+            completionObservationCount: raw.completionObservationCount,
             sourceSamplePosition: raw.sourceSamplePosition,
             timestampPingCount: raw.pingEventCount,
             aooStreamTimeSampleCount: raw.aooStreamTimeEventCount,
@@ -806,6 +816,8 @@ public final class AOOReceiver: @unchecked Sendable {
             outputPresentationLatencyMilliseconds: timestampMetrics.outputPresentationLatencyMilliseconds,
             latestArrivalResidualMilliseconds: raw.latestArrivalResidualMilliseconds,
             p99ArrivalResidualMilliseconds: raw.p99ArrivalResidualMilliseconds,
+            latestCompletionResidualMilliseconds: raw.latestCompletionResidualMilliseconds,
+            p99CompletionResidualMilliseconds: raw.p99CompletionResidualMilliseconds,
             estimatedPresentationToPresentationLatencyMilliseconds: timestampMetrics.estimatedPresentationToPresentationLatencyMilliseconds,
             targetLatencyMilliseconds: raw.targetLatencyMilliseconds,
             bufferCapacityMilliseconds: raw.bufferCapacityMilliseconds,
