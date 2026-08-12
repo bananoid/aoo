@@ -1494,9 +1494,12 @@ void source_desc::uninvite(const Sink& s){
     LOG_WARNING("AooSink: couldn't uninvite source - not running");
 }
 
-// TODO: make this non-blocking
+// The audio thread owns decoder state and publishes a cached diagnostic value.
 float source_desc::get_buffer_fill_ratio() {
-    scoped_shared_lock lock(mutex_);
+    return buffer_fill_ratio_.load(std::memory_order_relaxed);
+}
+
+void source_desc::update_buffer_fill_ratio() {
     if (decoder_){
         // consider samples in resampler!
         auto resampler_available = (double)resampler_.balance() / (double)format_->blockSize;
@@ -1504,9 +1507,12 @@ float source_desc::get_buffer_fill_ratio() {
         auto ratio = available / (double)jitter_buffer_.capacity();
         LOG_DEBUG("AooSink: fill ratio: " << ratio << ", jitter buffer: "
                   << jitter_buffer_.size() << ", resampler: " << resampler_available);
-        return std::min<float>(1.0, ratio);
+        buffer_fill_ratio_.store(
+            std::clamp<float>(ratio, 0.0, 1.0),
+            std::memory_order_relaxed
+        );
     } else {
-        return 0.0;
+        buffer_fill_ratio_.store(0, std::memory_order_relaxed);
     }
 }
 
@@ -2002,6 +2008,7 @@ bool source_desc::process(const Sink& s, AooSample **buffer, int32_t nsamples,
     }
 
     if (!decoder_){
+        update_buffer_fill_ratio();
         return false;
     }
 
@@ -2063,6 +2070,7 @@ bool source_desc::process(const Sink& s, AooSample **buffer, int32_t nsamples,
                 auto e = make_event<stream_state_event>(ep, kAooStreamStateInactive, 0);
                 s.send_event(std::move(e), kAooThreadLevelAudio);
             }
+            update_buffer_fill_ratio();
             return false;
         }
     }
@@ -2121,6 +2129,8 @@ bool source_desc::process(const Sink& s, AooSample **buffer, int32_t nsamples,
             if (!try_decode_block(s, buf, stats)) {
                 on_underrun(s);
 
+                update_buffer_fill_ratio();
+
                 lock.unlock(); // unlock before sending event!
 
                 flush_events(s);
@@ -2156,6 +2166,8 @@ bool source_desc::process(const Sink& s, AooSample **buffer, int32_t nsamples,
                 }
             } else if (!try_decode_block(s, nullptr, stats)) {
                 on_underrun(s);
+
+                update_buffer_fill_ratio();
 
                 lock.unlock(); // unlock before sending event!
 
@@ -2210,6 +2222,8 @@ bool source_desc::process(const Sink& s, AooSample **buffer, int32_t nsamples,
             }
         }
     }
+
+    update_buffer_fill_ratio();
 
     // send events
     lock.unlock();
@@ -3435,6 +3449,7 @@ void source_desc::reset_stream() {
     process_samples_ = 0;
     stream_samples_ = 0;
     stream_start_ = 0;
+    buffer_fill_ratio_.store(0, std::memory_order_relaxed);
     local_tt_.clear();
     last_ping_time_.store(-1e007); // force ping
     last_stop_time_ = 0; // reset stop request timer

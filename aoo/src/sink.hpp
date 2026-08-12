@@ -212,6 +212,8 @@ private:
 
     bool try_decode_block(const Sink& s, AooSample* buffer, stream_stats& stats);
 
+    void update_buffer_fill_ratio();
+
     void check_missing_blocks(const Sink& s);
 
     void sched_stream_message(stream_message_header *msg);
@@ -279,6 +281,7 @@ private:
     int32_t round_trip_write_index_ = 0;
     int32_t round_trip_count_ = 0;
     std::atomic<double> round_trip_p95_{0};
+    std::atomic<float> buffer_fill_ratio_{0};
     // audio decoder
     std::unique_ptr<AooFormat, format_deleter> format_;
     std::unique_ptr<AooCodec, decoder_deleter> decoder_;
