@@ -1677,12 +1677,16 @@ void Source::send_start(const sendfn& fn){
         // offset has been bashed into data pointer, see startStream()
         offset = reinterpret_cast<intptr_t>(metadata_->data) * ratio;
         if (metadata_->size > 0) {
-            // restore data pointer!
-            metadata_->data = (AooByte *)metadata_.get() + sizeof(AooData);
-            // copy metadata
-            auto mdsize = flat_metadata_size(*metadata_);
+            // Keep the stored data pointer encoded as the sample offset. A
+            // later-joining sink may need another /start message, and
+            // interpreting a previously restored metadata pointer as an
+            // offset would schedule activation arbitrarily far in the future.
+            auto metadata_view = *metadata_;
+            metadata_view.data = reinterpret_cast<AooByte *>(metadata_.get())
+                + sizeof(AooData);
+            auto mdsize = flat_metadata_size(metadata_view);
             md = (AooData *)alloca(mdsize);
-            flat_metadata_copy(*metadata_, *md);
+            flat_metadata_copy(metadata_view, *md);
         }
     }
 #if IDLE_IF_NO_SINKS

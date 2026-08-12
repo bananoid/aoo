@@ -130,6 +130,50 @@ struct TransportLoopbackTests {
         }
     }
 
+    @Test func receiverJoiningAnActiveSenderBecomesActive() throws {
+        let port = testPort(offset: 42)
+        var senderConfiguration = AOOStreamConfiguration
+            .deterministicWired(channelCount: 2)
+        senderConfiguration.maximumCallbackFrames = 64
+        let sender = try AOOSender(configuration: senderConfiguration)
+        try sender.apply(AOOPeerConfiguration(
+            isEnabled: true,
+            host: "127.0.0.1",
+            receiverPort: port
+        ))
+
+        sendWithoutReceiving(
+            sender: sender,
+            sourceChannelCount: 2,
+            frameCount: 64,
+            iterations: 16
+        )
+
+        var receiverConfiguration = AOOStreamConfiguration
+            .automaticReceiver(channelCapacity: 2)
+        receiverConfiguration.maximumCallbackFrames = 64
+        let receiver = try AOOReceiver(
+            localPort: port,
+            configuration: receiverConfiguration,
+            fixedCallbackSize: true
+        )
+        receiver.setMonitorPair(startingAtOneBased: 1)
+
+        let peak = pump(
+            sender: sender,
+            receiver: receiver,
+            sourceChannelCount: 2,
+            sourceLeftChannel: 0,
+            sourceRightChannel: 1,
+            frameCount: 64,
+            iterations: 1_200
+        )
+
+        #expect(peak > 0.05)
+        #expect(waitUntil(timeout: 1) { receiver.status.streamActive })
+        #expect(receiver.status.streamActiveCount > 0)
+    }
+
     @Test func adaptiveWirelessTransportsPackedInt24() throws {
         let port = testPort(offset: 1)
         var configuration = AOOStreamConfiguration.adaptiveWireless(
