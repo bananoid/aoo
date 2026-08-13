@@ -268,6 +268,9 @@ class unbounded_mpsc_queue :
         // check for existing empty nodes
         for (auto it = first_, end = divider_.load();
              it != end; it = it->next_) {
+            if (n == 0) {
+                return;
+            }
             n--;
         }
         // add empty nodes

@@ -21,6 +21,15 @@
 
 namespace aoo {
 
+struct udp_receive_timing_statistics {
+    uint64_t datagram_count = 0;
+    uint64_t kernel_timestamp_count = 0;
+    double latest_kernel_datagram_gap = 0;
+    double maximum_kernel_datagram_gap = 0;
+    double latest_kernel_to_receive_delay = 0;
+    double maximum_kernel_to_receive_delay = 0;
+};
+
 class udp_error : public socket_error {
 public:
     using socket_error::socket_error;
@@ -60,6 +69,9 @@ public:
     bool running() const { return running_.load(std::memory_order_relaxed); }
     void stop();
     void notify();
+    void get_receive_timing_statistics(
+        udp_receive_timing_statistics& statistics
+    ) const;
 
     int send(const aoo::ip_address& addr, const AooByte *data, AooSize size) {
         return socket_.send(data, size, addr);
@@ -67,6 +79,8 @@ public:
 private:
     bool receive(double timeout);
     void do_close();
+    void reset_receive_timing_statistics();
+    void observe_receive_timing(uint64_t kernel_timestamp);
 
     udp_socket socket_;
     aoo::ip_address bind_addr_;
@@ -74,6 +88,13 @@ private:
     int receive_buffer_size_ = 0;
     std::atomic<bool> running_{false};
     bool threaded_ = false;
+    std::atomic<uint64_t> receive_datagram_count_{0};
+    std::atomic<uint64_t> kernel_timestamp_count_{0};
+    std::atomic<uint64_t> last_kernel_timestamp_{0};
+    std::atomic<uint64_t> latest_kernel_datagram_gap_{0};
+    std::atomic<uint64_t> maximum_kernel_datagram_gap_{0};
+    std::atomic<uint64_t> latest_kernel_to_receive_delay_{0};
+    std::atomic<uint64_t> maximum_kernel_to_receive_delay_{0};
 
     std::vector<AooByte> buffer_;
 

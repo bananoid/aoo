@@ -5,6 +5,7 @@
 #include "aoo_types.h"
 
 #include <cassert>
+#include <cstdint>
 #include <cstring>
 #include <ostream>
 #include <string>
@@ -304,6 +305,16 @@ public:
         return do_receive(buf, size, &address, timeout);
     }
 
+    std::pair<bool, int> receive(
+        void *buf,
+        int size,
+        ip_address& address,
+        double timeout,
+        uint64_t *monotonic_timestamp
+    ) {
+        return do_receive(buf, size, &address, timeout, monotonic_timestamp);
+    }
+
     void set_send_buffer_size(int bufsize);
 
     int send_buffer_size() const;
@@ -311,6 +322,8 @@ public:
     void set_receive_buffer_size(int bufsize);
 
     int receive_buffer_size() const;
+
+    bool enable_monotonic_receive_timestamps(bool enabled);
 
     void set_non_blocking(bool b);
 
@@ -341,7 +354,13 @@ protected:
         return *this;
     }
 
-    std::pair<bool, int> do_receive(void *buf, int size, ip_address* addr, double timeout);
+    std::pair<bool, int> do_receive(
+        void *buf,
+        int size,
+        ip_address* addr,
+        double timeout,
+        uint64_t *monotonic_timestamp = nullptr
+    );
 
     socket_type socket_;
 };

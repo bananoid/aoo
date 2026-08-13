@@ -2,6 +2,7 @@
 
 #include "detail.hpp"
 
+#include <algorithm>
 #include <vector>
 
 namespace aoo {
@@ -22,6 +23,13 @@ public:
     int32_t capacity() const { return size_; }
     double balance() const {
         return balance_;
+    }
+    int32_t readable_frames() const {
+        if (bypass_) {
+            return 0;
+        }
+        const auto readable = std::max(0.0, balance_ - latency_) / advance_;
+        return static_cast<int32_t>(readable);
     }
     double ratio() const { return ideal_ratio_; }
     int32_t latency() const { return latency_; } // in terms of the writer

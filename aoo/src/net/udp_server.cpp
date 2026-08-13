@@ -3,7 +3,40 @@
 #include "common/log.hpp"
 #include "common/utils.hpp"
 
+#if defined(__APPLE__)
+#include <mach/mach_time.h>
+#endif
+
 namespace aoo {
+
+namespace {
+
+void accumulate_maximum(std::atomic<uint64_t>& target, uint64_t value) {
+    auto maximum = target.load(std::memory_order_relaxed);
+    while (value > maximum
+           && !target.compare_exchange_weak(
+               maximum,
+               value,
+               std::memory_order_relaxed,
+               std::memory_order_relaxed
+           )) {}
+}
+
+double monotonic_ticks_to_seconds(uint64_t ticks) {
+#if defined(__APPLE__)
+    mach_timebase_info_data_t timebase{};
+    mach_timebase_info(&timebase);
+    return static_cast<double>(ticks)
+        * static_cast<double>(timebase.numer)
+        / static_cast<double>(timebase.denom)
+        * 1.0e-9;
+#else
+    (void)ticks;
+    return 0;
+#endif
+}
+
+} // namespace
 
 void udp_server::start(int port, receive_handler receive, bool threaded) {
     do_close();
@@ -21,6 +54,9 @@ void udp_server::start(int port, receive_handler receive, bool threaded) {
     } catch (const socket_error& e) {
         throw udp_error(e);
     }
+
+    reset_receive_timing_statistics();
+    socket_.enable_monotonic_receive_timestamps(true);
 
     if (send_buffer_size_ > 0) {
         try {
@@ -162,13 +198,75 @@ udp_server::~udp_server() {
     do_close();
 }
 
+void udp_server::reset_receive_timing_statistics() {
+    receive_datagram_count_.store(0, std::memory_order_relaxed);
+    kernel_timestamp_count_.store(0, std::memory_order_relaxed);
+    last_kernel_timestamp_.store(0, std::memory_order_relaxed);
+    latest_kernel_datagram_gap_.store(0, std::memory_order_relaxed);
+    maximum_kernel_datagram_gap_.store(0, std::memory_order_relaxed);
+    latest_kernel_to_receive_delay_.store(0, std::memory_order_relaxed);
+    maximum_kernel_to_receive_delay_.store(0, std::memory_order_relaxed);
+}
+
+void udp_server::observe_receive_timing(uint64_t kernel_timestamp) {
+    receive_datagram_count_.fetch_add(1, std::memory_order_relaxed);
+#if defined(__APPLE__)
+    if (kernel_timestamp == 0) {
+        return;
+    }
+    kernel_timestamp_count_.fetch_add(1, std::memory_order_relaxed);
+    const uint64_t previous = last_kernel_timestamp_.exchange(
+        kernel_timestamp,
+        std::memory_order_relaxed
+    );
+    if (previous > 0 && kernel_timestamp >= previous) {
+        const uint64_t gap = kernel_timestamp - previous;
+        latest_kernel_datagram_gap_.store(gap, std::memory_order_relaxed);
+        accumulate_maximum(maximum_kernel_datagram_gap_, gap);
+    }
+    const uint64_t received = mach_absolute_time();
+    if (received >= kernel_timestamp) {
+        const uint64_t delay = received - kernel_timestamp;
+        latest_kernel_to_receive_delay_.store(delay, std::memory_order_relaxed);
+        accumulate_maximum(maximum_kernel_to_receive_delay_, delay);
+    }
+#else
+    (void)kernel_timestamp;
+#endif
+}
+
+void udp_server::get_receive_timing_statistics(
+        udp_receive_timing_statistics& statistics) const {
+    statistics.datagram_count = receive_datagram_count_.load(
+        std::memory_order_relaxed
+    );
+    statistics.kernel_timestamp_count = kernel_timestamp_count_.load(
+        std::memory_order_relaxed
+    );
+    statistics.latest_kernel_datagram_gap = monotonic_ticks_to_seconds(
+        latest_kernel_datagram_gap_.load(std::memory_order_relaxed)
+    );
+    statistics.maximum_kernel_datagram_gap = monotonic_ticks_to_seconds(
+        maximum_kernel_datagram_gap_.load(std::memory_order_relaxed)
+    );
+    statistics.latest_kernel_to_receive_delay = monotonic_ticks_to_seconds(
+        latest_kernel_to_receive_delay_.load(std::memory_order_relaxed)
+    );
+    statistics.maximum_kernel_to_receive_delay = monotonic_ticks_to_seconds(
+        maximum_kernel_to_receive_delay_.load(std::memory_order_relaxed)
+    );
+}
+
 bool udp_server::receive(double timeout) {
     try {
         aoo::ip_address address;
+        uint64_t kernelTimestamp = 0;
         auto [success, result] = socket_.receive(buffer_.data(), buffer_.size(),
-                                                 address, timeout);
+                                                 address, timeout,
+                                                 &kernelTimestamp);
         if (success) {
             if (result > 0) {
+                observe_receive_timing(kernelTimestamp);
                 if (threaded_) {
                     packet_queue_.produce([&, len=result](auto& packet){
                         packet.data.assign(buffer_.data(), buffer_.data() + len);

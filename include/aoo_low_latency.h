@@ -74,7 +74,15 @@ typedef struct AooLowLatencySinkStatistics {
     AooUInt64 datagramObservationCount;
     AooUInt64 staleDatagramCount;
     AooUInt64 incompleteBlockCount;
+    AooUInt64 emptyBlockCount;
+    AooUInt64 reacquisitionCount;
     AooUInt64 trimmedBacklogBlockCount;
+    AooUInt32 currentBufferedBlockCount;
+    AooUInt32 currentContiguousCompleteBlockCount;
+    AooUInt32 currentMissingBlockStreak;
+    AooUInt32 maximumMissingBlockStreak;
+    AooUInt32 currentResamplerBufferedFrameCount;
+    AooUInt32 currentPlayableFrameCount;
     AooSeconds latestDatagramGap;
     AooSeconds maximumDatagramGap;
     AooSampleRate latestSourceSampleRate;
@@ -89,6 +97,15 @@ typedef struct AooLowLatencyClientSendStatistics {
     AooInt32 lastSendResult;
     AooInt32 lastSocketError;
 } AooLowLatencyClientSendStatistics;
+
+typedef struct AooLowLatencyClientReceiveStatistics {
+    AooUInt64 datagramCount;
+    AooUInt64 kernelTimestampCount;
+    AooSeconds latestKernelDatagramGap;
+    AooSeconds maximumKernelDatagramGap;
+    AooSeconds latestKernelToReceiveDelay;
+    AooSeconds maximumKernelToReceiveDelay;
+} AooLowLatencyClientReceiveStatistics;
 
 /** Encode the fixed, network-byte-order low-latency packet header. */
 AOO_API AooError AOO_CALL aoo_lowLatencyPacketHeaderEncode(
@@ -152,6 +169,12 @@ AOO_API AooError AOO_CALL AooSink_setLowLatencyTarget(
 AOO_API AooError AOO_CALL AooClient_getLowLatencySendStatistics(
     AooClient *client,
     AooLowLatencyClientSendStatistics *statistics
+);
+
+/** Copy monotonic UDP receive timing statistics without resetting them. */
+AOO_API AooError AOO_CALL AooClient_getLowLatencyReceiveStatistics(
+    AooClient *client,
+    AooLowLatencyClientReceiveStatistics *statistics
 );
 
 #ifdef __cplusplus

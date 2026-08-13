@@ -139,6 +139,12 @@ public:
 
     void queue_message(message&& msg);
 
+    void get_receive_timing_statistics(
+        udp_receive_timing_statistics& statistics
+    ) const {
+        udp_server_.get_receive_timing_statistics(statistics);
+    }
+
     static int send(void *user, const AooByte *data, AooInt32 size,
                     const void *address, AooAddrSize addrlen, AooFlag) {
         aoo::ip_address addr((const struct sockaddr *)address, addrlen);
@@ -323,6 +329,10 @@ public:
 
     void getLowLatencySendStatistics(
         AooLowLatencyClientSendStatistics& statistics
+    ) const;
+
+    void getLowLatencyReceiveStatistics(
+        AooLowLatencyClientReceiveStatistics& statistics
     ) const;
 
     //---------------------------------------------------------------------//

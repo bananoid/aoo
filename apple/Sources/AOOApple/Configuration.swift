@@ -106,6 +106,7 @@ public struct AOOStreamConfiguration: Codable, Equatable, Sendable {
     public static func deterministicWired(
         channelCount: Int,
         sampleRate: Double = 48_000,
+        blockSize: Int = 64,
         channelMap: [Int]? = nil
     ) -> AOOStreamConfiguration {
         AOOStreamConfiguration(
@@ -113,9 +114,9 @@ public struct AOOStreamConfiguration: Codable, Equatable, Sendable {
             format: .float32,
             channelCount: channelCount,
             sampleRate: sampleRate,
-            blockSize: 64,
+            blockSize: blockSize,
             datagramSize: 1_400,
-            targetLatencyMilliseconds: max(4, 3 * 64 / sampleRate * 1_000),
+            targetLatencyMilliseconds: max(4, 3 * Double(blockSize) / sampleRate * 1_000),
             channelMap: channelMap
         )
     }
@@ -123,10 +124,11 @@ public struct AOOStreamConfiguration: Codable, Equatable, Sendable {
     public static func adaptiveWireless(
         channelCount: Int,
         sampleRate: Double = 48_000,
+        blockSize: Int = 64,
         initialRoundTripP99Milliseconds: Double? = nil,
         channelMap: [Int]? = nil
     ) -> AOOStreamConfiguration {
-        let blockMilliseconds = 64 / sampleRate * 1_000
+        let blockMilliseconds = Double(blockSize) / sampleRate * 1_000
         let initialLatency = initialRoundTripP99Milliseconds.flatMap { p99 in
             p99.isFinite && p99 >= 0 ? max(8, p99 * 0.5 + 2 * blockMilliseconds) : nil
         } ?? 50
@@ -135,7 +137,7 @@ public struct AOOStreamConfiguration: Codable, Equatable, Sendable {
             format: .int24,
             channelCount: channelCount,
             sampleRate: sampleRate,
-            blockSize: 64,
+            blockSize: blockSize,
             datagramSize: 1_200,
             targetLatencyMilliseconds: initialLatency,
             channelMap: channelMap

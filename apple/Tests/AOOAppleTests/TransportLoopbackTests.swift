@@ -113,6 +113,16 @@ struct TransportLoopbackTests {
         #expect(receiver.status.profile == .deterministicWired)
         #expect(receiver.status.format == .float32)
         #expect(receiver.status.completionObservationCount > 0)
+        #expect(
+            abs(
+                receiver.status.jitterBufferLatencyMilliseconds
+                    - receiverConfiguration.targetLatencyMilliseconds
+            ) < 0.1
+        )
+        #expect(receiver.status.socketDatagramObservationCount > 0)
+        #expect(receiver.status.kernelTimestampObservationCount > 0)
+        #expect(receiver.status.maximumKernelDatagramGapMilliseconds > 0)
+        #expect(receiver.status.maximumKernelToReceiveDelayMilliseconds >= 0)
         #expect(sender.status.handoffDropCount == 0)
         #expect(sender.status.processErrorCount == 0)
         #expect(sender.status.maximumProcessIntervalMilliseconds > 0)
@@ -350,7 +360,18 @@ struct TransportLoopbackTests {
         #expect(peak > 0.05)
         #expect(waitUntil(timeout: 1) { receiver.status.streamActive })
         #expect(receiver.status.reacquisitionCount > 0)
-        #expect(abs(receiver.status.jitterBufferLatencyMilliseconds - 4) < 0.1)
+        #expect(
+            receiver.status.emptyBlockCount
+                + receiver.status.incompleteBlockCount > 0
+        )
+        #expect(receiver.status.maximumMissingBlockStreak >= 4)
+        #expect(receiver.status.currentMissingBlockStreak < 4)
+        #expect(
+            abs(
+                receiver.status.jitterBufferLatencyMilliseconds
+                    - receiverConfiguration.targetLatencyMilliseconds
+            ) < 0.1
+        )
         #expect(receiver.status.processErrorCount == 0)
     }
 
@@ -359,6 +380,7 @@ struct TransportLoopbackTests {
         var receiverConfiguration = AOOStreamConfiguration
             .automaticReceiver(channelCapacity: 2)
         receiverConfiguration.maximumCallbackFrames = 64
+        receiverConfiguration.targetLatencyMilliseconds = 4
         let receiver = try AOOReceiver(
             localPort: port,
             configuration: receiverConfiguration,
@@ -427,6 +449,65 @@ struct TransportLoopbackTests {
             status.bufferedAudioMilliseconds
                 <= status.targetLatencyMilliseconds + blockMilliseconds * 2
         )
+    }
+
+    @Test func deterministicWiredActivePlayoutDoesNotKeepCatchUpBacklog() throws {
+        let port = testPort(offset: 42)
+        var receiverConfiguration = AOOStreamConfiguration
+            .automaticReceiver(channelCapacity: 2)
+        receiverConfiguration.maximumCallbackFrames = 64
+        receiverConfiguration.targetLatencyMilliseconds = 4
+        let receiver = try AOOReceiver(
+            localPort: port,
+            configuration: receiverConfiguration,
+            fixedCallbackSize: true
+        )
+
+        var senderConfiguration = AOOStreamConfiguration
+            .deterministicWired(channelCount: 2)
+        senderConfiguration.maximumCallbackFrames = 64
+        let sender = try AOOSender(configuration: senderConfiguration)
+        try sender.apply(AOOPeerConfiguration(
+            isEnabled: true,
+            host: "127.0.0.1",
+            receiverPort: port
+        ))
+
+        _ = pump(
+            sender: sender,
+            receiver: receiver,
+            sourceChannelCount: 2,
+            sourceLeftChannel: 0,
+            sourceRightChannel: 1,
+            frameCount: 64,
+            iterations: 900
+        )
+        #expect(waitUntil { receiver.status.streamActive })
+
+        sendWithoutReceiving(
+            sender: sender,
+            sourceChannelCount: 2,
+            frameCount: 64,
+            iterations: 80
+        )
+
+        var outputLeft = Array(repeating: Float.zero, count: 64)
+        var outputRight = Array(repeating: Float.zero, count: 64)
+        outputLeft.withUnsafeMutableBufferPointer { left in
+            outputRight.withUnsafeMutableBufferPointer { right in
+                receiver.processStereo(
+                    outputLeft: left.baseAddress!,
+                    outputRight: right.baseAddress!,
+                    frameCount: 64
+                )
+            }
+        }
+
+        let status = receiver.status
+        #expect(status.trimmedBacklogBlockCount > 0)
+        #expect(status.currentBufferedBlockCount <= 4)
+        #expect(status.currentContiguousCompleteBlockCount <= 4)
+        #expect(status.currentPlayableFrameCount <= 5 * 64)
     }
 
     private func pump(

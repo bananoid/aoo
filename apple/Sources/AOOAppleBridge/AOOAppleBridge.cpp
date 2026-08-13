@@ -83,29 +83,29 @@ void configureSenderProcessThread() {
 }
 
 #if defined(__APPLE__)
-class SenderAudioWorkInterval {
+class AudioWorkInterval {
 public:
-    SenderAudioWorkInterval() = default;
+    AudioWorkInterval() = default;
 
-    void initialize(double blockDurationSeconds) {
+    void initialize(const char *name, double blockDurationSeconds) {
         mach_timebase_info(&timebase_);
         blockPeriod_ = secondsToTicks(blockDurationSeconds);
         idlePollPeriod_ = std::max<uint64_t>(1, blockPeriod_ / 8);
         interval_ = AudioWorkIntervalCreate(
-            "AOO sender",
+            name,
             OS_CLOCK_MACH_ABSOLUTE_TIME,
             nullptr
         );
     }
 
-    ~SenderAudioWorkInterval() {
+    ~AudioWorkInterval() {
         if (interval_) {
             os_release(interval_);
         }
     }
 
-    SenderAudioWorkInterval(const SenderAudioWorkInterval&) = delete;
-    SenderAudioWorkInterval& operator=(const SenderAudioWorkInterval&) = delete;
+    AudioWorkInterval(const AudioWorkInterval&) = delete;
+    AudioWorkInterval& operator=(const AudioWorkInterval&) = delete;
 
     uint64_t now() const {
         return mach_absolute_time();
@@ -117,6 +117,13 @@ public:
 
     uint64_t ticksForSeconds(double seconds) const {
         return secondsToTicks(seconds);
+    }
+
+    double millisecondsForTicks(uint64_t ticks) const {
+        return static_cast<double>(ticks)
+            * static_cast<double>(timebase_.numer)
+            / static_cast<double>(timebase_.denom)
+            * 1.0e-6;
     }
 
     void join() {
@@ -255,6 +262,16 @@ void accumulateMaximum(std::atomic<double>& destination, double value) {
     )) {}
 }
 
+void accumulateMaximum(std::atomic<uint64_t>& destination, uint64_t value) {
+    uint64_t current = destination.load(std::memory_order_relaxed);
+    while (value > current && !destination.compare_exchange_weak(
+        current,
+        value,
+        std::memory_order_relaxed,
+        std::memory_order_relaxed
+    )) {}
+}
+
 inline AooSample finiteSample(AooSample sample) {
     return std::isfinite(sample) ? sample : 0;
 }
@@ -296,8 +313,14 @@ struct SenderMetrics {
     std::atomic<int64_t> cadenceStartNanoseconds{0};
     std::atomic<int64_t> cadenceLastNanoseconds{0};
     std::atomic<uint64_t> cadenceBlockCount{0};
+    std::atomic<uint64_t> currentProcessQueueDepth{0};
+    std::atomic<uint64_t> maximumProcessQueueDepth{0};
+    std::atomic<uint64_t> pacingCatchUpBlocks{0};
+    std::atomic<uint64_t> pacingReanchors{0};
     std::atomic<double> handoffLatencyMilliseconds{0};
     std::atomic<double> maximumHandoffLatencyMilliseconds{0};
+    std::atomic<double> pacingLatenessMilliseconds{0};
+    std::atomic<double> maximumPacingLatenessMilliseconds{0};
     std::atomic<double> maximumProcessIntervalMilliseconds{0};
     std::atomic<double> sourcePresentationLeadMilliseconds{0};
     std::atomic<double> roundTripMilliseconds{0};
@@ -417,7 +440,7 @@ struct AOOAppleSender {
     std::mutex destinationMutex;
     SenderMetrics metrics;
 #if defined(__APPLE__)
-    SenderAudioWorkInterval audioWorkInterval;
+    AudioWorkInterval audioWorkInterval;
 #endif
 
     ~AOOAppleSender() {
@@ -485,11 +508,15 @@ struct AOOAppleReceiver {
     std::atomic<uint64_t> sourceEndpointFingerprint{0};
     std::thread sendThread;
     std::thread receiveThread;
+    std::atomic<bool> receiveThreadShouldRun{false};
     std::atomic<bool> eventThreadShouldRun{false};
     std::thread eventThread;
     std::atomic<bool> adaptiveThreadShouldRun{false};
     std::thread adaptiveThread;
     ReceiverMetrics metrics;
+#if defined(__APPLE__)
+    AudioWorkInterval audioWorkInterval;
+#endif
 
     ~AOOAppleReceiver() {
         eventThreadShouldRun.store(false, std::memory_order_release);
@@ -501,6 +528,7 @@ struct AOOAppleReceiver {
             adaptiveThread.join();
         }
         if (client) {
+            receiveThreadShouldRun.store(false, std::memory_order_release);
             AooClient_stop(client);
         }
         if (sendThread.joinable()) {
@@ -620,14 +648,16 @@ bool applyReceiverChannelMap(
             negotiatedConfiguration.pcmFormat,
             std::memory_order_release
         );
+        const AooUInt32 receiverTargetFrames =
+            receiver->expectedStreamConfiguration.targetLatencyFrames;
         receiver->targetLatencySeconds.store(
-            static_cast<double>(negotiatedConfiguration.targetLatencyFrames)
+            static_cast<double>(receiverTargetFrames)
                 / negotiatedConfiguration.sampleRate,
             std::memory_order_release
         );
         AooSink_setLowLatencyTarget(
             receiver->sink,
-            negotiatedConfiguration.targetLatencyFrames
+            receiverTargetFrames
         );
     }
     return true;
@@ -1140,12 +1170,42 @@ void startReceiverNetworkThreads(AOOAppleReceiver *receiver) {
             receiver->metrics.lastError.store(result, std::memory_order_relaxed);
         }
     });
+    receiver->receiveThreadShouldRun.store(true, std::memory_order_release);
     receiver->receiveThread = std::thread([receiver] {
         configureRealtimeNetworkThread();
-        const AooError result = AooClient_receive(receiver->client, kAooInfinite);
-        if (result != kAooOk) {
+#if defined(__APPLE__)
+        auto& workInterval = receiver->audioWorkInterval;
+        workInterval.join();
+#endif
+        const double receivePeriod = std::max(
+            0.000'25,
+            static_cast<double>(receiver->streamBlockSize)
+                / receiver->sampleRate
+        );
+        while (receiver->receiveThreadShouldRun.load(std::memory_order_acquire)) {
+            // A finite receive drains every datagram already queued after the
+            // first wake. This keeps all fragments of a multichannel audio
+            // block together instead of returning to a blocking receive after
+            // each fragment.
+#if defined(__APPLE__)
+            workInterval.start(workInterval.now());
+#endif
+            const AooError result = AooClient_receive(
+                receiver->client,
+                receivePeriod
+            );
+#if defined(__APPLE__)
+            workInterval.finish();
+#endif
+            if (result == kAooOk || result == kAooErrorWouldBlock) {
+                continue;
+            }
             receiver->metrics.lastError.store(result, std::memory_order_relaxed);
+            break;
         }
+#if defined(__APPLE__)
+        workInterval.leave();
+#endif
     });
 }
 
@@ -1403,6 +1463,15 @@ AooError enqueueSenderProcessBlock(
                 }
             }
             sender->processWriteIndex.store(writeIndex + 1, std::memory_order_release);
+            const uint64_t queueDepth = writeIndex + 1 - readIndex;
+            sender->metrics.currentProcessQueueDepth.store(
+                queueDepth,
+                std::memory_order_relaxed
+            );
+            accumulateMaximum(
+                sender->metrics.maximumProcessQueueDepth,
+                queueDepth
+            );
         }
         sender->pendingFrameCount = 0;
     }
@@ -1629,6 +1698,13 @@ bool processNextSenderBlock(AOOAppleSender *sender) {
     } else {
         sender->processReadIndex.store(readIndex + 1, std::memory_order_release);
     }
+    const uint64_t remainingBlocks = sender->processWriteIndex.load(
+        std::memory_order_acquire
+    ) - sender->processReadIndex.load(std::memory_order_acquire);
+    sender->metrics.currentProcessQueueDepth.store(
+        remainingBlocks,
+        std::memory_order_relaxed
+    );
     return true;
 }
 
@@ -1670,6 +1746,15 @@ void startSenderProcessThread(AOOAppleSender *sender) {
                 if (deadlineAnchored && nextDeadline > now) {
                     workInterval.sleepUntil(nextDeadline);
                 } else {
+                    if (sender->transportProfile
+                            == AOOAppleTransportProfileDeterministicWired) {
+                        // The callback is the long-term pacing authority. Once
+                        // its queue drains, anchor the next burst to the next
+                        // callback instead of retaining accumulated scheduler
+                        // lateness forever.
+                        deadlineAnchored = false;
+                        previousSourceNtpTime = 0;
+                    }
                     workInterval.idleSleep();
                 }
                 continue;
@@ -1689,12 +1774,40 @@ void startSenderProcessThread(AOOAppleSender *sender) {
                         nominalInterval
                     )
                 );
-                if (now > nextDeadline + workInterval.blockPeriod() * 4) {
+                // A deterministic stream must return to its original source
+                // timeline after a scheduling stall. Re-anchoring here leaves
+                // every queued and future packet permanently late.
+                if (sender->transportProfile
+                        != AOOAppleTransportProfileDeterministicWired
+                    && now > nextDeadline + workInterval.blockPeriod() * 4) {
                     nextDeadline = now;
+                    sender->metrics.pacingReanchors.fetch_add(
+                        1,
+                        std::memory_order_relaxed
+                    );
                 }
             }
             workInterval.sleepUntil(nextDeadline);
             const uint64_t cycleStart = workInterval.now();
+            const uint64_t lateTicks = cycleStart > nextDeadline
+                ? cycleStart - nextDeadline
+                : 0;
+            const double latenessMilliseconds =
+                workInterval.millisecondsForTicks(lateTicks);
+            sender->metrics.pacingLatenessMilliseconds.store(
+                latenessMilliseconds,
+                std::memory_order_relaxed
+            );
+            accumulateMaximum(
+                sender->metrics.maximumPacingLatenessMilliseconds,
+                latenessMilliseconds
+            );
+            if (lateTicks > workInterval.blockPeriod()) {
+                sender->metrics.pacingCatchUpBlocks.fetch_add(
+                    1,
+                    std::memory_order_relaxed
+                );
+            }
             workInterval.start(cycleStart);
             const bool processedBlock = processNextSenderBlock(sender);
             workInterval.finish();
@@ -1732,6 +1845,11 @@ void startSenderProcessThread(AOOAppleSender *sender) {
                 if (deadlineAnchored && nextDeadline > now) {
                     std::this_thread::sleep_until(nextDeadline);
                 } else {
+                    if (sender->transportProfile
+                            == AOOAppleTransportProfileDeterministicWired) {
+                        deadlineAnchored = false;
+                        previousSourceNtpTime = 0;
+                    }
                     std::this_thread::sleep_for(idlePollPeriod);
                 }
                 continue;
@@ -1754,12 +1872,40 @@ void startSenderProcessThread(AOOAppleSender *sender) {
                 nextDeadline += std::chrono::duration_cast<clock::duration>(
                     sourceInterval
                 );
-                if (now > nextDeadline + blockPeriod * 4) {
+                // Keep the non-Apple deterministic behavior identical to the
+                // AudioWorkInterval path above.
+                if (sender->transportProfile
+                        != AOOAppleTransportProfileDeterministicWired
+                    && now > nextDeadline + blockPeriod * 4) {
                     nextDeadline = now;
+                    sender->metrics.pacingReanchors.fetch_add(
+                        1,
+                        std::memory_order_relaxed
+                    );
                 }
             }
             if (nextDeadline > now) {
                 std::this_thread::sleep_until(nextDeadline);
+            }
+            const auto cycleStart = clock::now();
+            const auto lateness = cycleStart > nextDeadline
+                ? cycleStart - nextDeadline
+                : clock::duration::zero();
+            const double latenessMilliseconds =
+                std::chrono::duration<double, std::milli>(lateness).count();
+            sender->metrics.pacingLatenessMilliseconds.store(
+                latenessMilliseconds,
+                std::memory_order_relaxed
+            );
+            accumulateMaximum(
+                sender->metrics.maximumPacingLatenessMilliseconds,
+                latenessMilliseconds
+            );
+            if (lateness > blockPeriod) {
+                sender->metrics.pacingCatchUpBlocks.fetch_add(
+                    1,
+                    std::memory_order_relaxed
+                );
             }
             if (processNextSenderBlock(sender)) {
                 previousSourceNtpTime = sourceNtpTime;
@@ -2015,6 +2161,7 @@ AOOAppleSender *AOOAppleSenderCreate(
     }
 #if defined(__APPLE__)
     sender->audioWorkInterval.initialize(
+        "AOO sender",
         static_cast<double>(sender->streamBlockSize) / sender->sampleRate
     );
 #endif
@@ -2366,8 +2513,27 @@ void AOOAppleSenderGetStatus(
         status->lastDatagramSendResult = sendStatistics.lastSendResult;
         status->lastDatagramSocketError = sendStatistics.lastSocketError;
     }
+    status->currentProcessQueueDepth = sender->metrics.currentProcessQueueDepth.load(
+        std::memory_order_relaxed
+    );
+    status->maximumProcessQueueDepth = sender->metrics.maximumProcessQueueDepth.load(
+        std::memory_order_relaxed
+    );
+    status->pacingCatchUpBlockCount = sender->metrics.pacingCatchUpBlocks.load(
+        std::memory_order_relaxed
+    );
+    status->pacingReanchorCount = sender->metrics.pacingReanchors.load(
+        std::memory_order_relaxed
+    );
     status->handoffLatencyMilliseconds = sender->metrics.handoffLatencyMilliseconds.load(std::memory_order_relaxed);
     status->maximumHandoffLatencyMilliseconds = sender->metrics.maximumHandoffLatencyMilliseconds.load(std::memory_order_relaxed);
+    status->pacingLatenessMilliseconds = sender->metrics.pacingLatenessMilliseconds.load(
+        std::memory_order_relaxed
+    );
+    status->maximumPacingLatenessMilliseconds =
+        sender->metrics.maximumPacingLatenessMilliseconds.load(
+            std::memory_order_relaxed
+        );
     status->maximumProcessIntervalMilliseconds =
         sender->metrics.maximumProcessIntervalMilliseconds.load(
             std::memory_order_relaxed
@@ -2490,6 +2656,12 @@ AOOAppleReceiver *AOOAppleReceiverCreate(
     receiver->packetSize = clampedPacketSize(packetSize);
     receiver->transportProfile = transportProfile;
     receiver->pcmFormat = pcmFormat;
+#if defined(__APPLE__)
+    receiver->audioWorkInterval.initialize(
+        "AOO receiver",
+        static_cast<double>(receiver->streamBlockSize) / receiver->sampleRate
+    );
+#endif
     receiver->activeTransportProfile.store(
         transportProfile,
         std::memory_order_relaxed
@@ -2577,8 +2749,7 @@ AOOAppleReceiver *AOOAppleReceiverCreate(
             );
         }
     }
-    if (result == kAooOk
-        && receiver->transportProfile != AOOAppleTransportProfileAutomatic) {
+    if (result == kAooOk) {
         result = AooSink_setLowLatencyTarget(
             receiver->sink,
             static_cast<AooUInt32>(std::llround(
@@ -3053,8 +3224,25 @@ void AOOAppleReceiverGetStatus(
             lowLatencyStatistics.datagramObservationCount;
         status->staleDatagramCount = lowLatencyStatistics.staleDatagramCount;
         status->incompleteBlockCount = lowLatencyStatistics.incompleteBlockCount;
+        status->emptyBlockCount = lowLatencyStatistics.emptyBlockCount;
         status->trimmedBacklogBlockCount =
             lowLatencyStatistics.trimmedBacklogBlockCount;
+        status->currentBufferedBlockCount =
+            lowLatencyStatistics.currentBufferedBlockCount;
+        status->currentContiguousCompleteBlockCount =
+            lowLatencyStatistics.currentContiguousCompleteBlockCount;
+        status->currentMissingBlockStreak =
+            lowLatencyStatistics.currentMissingBlockStreak;
+        status->maximumMissingBlockStreak =
+            lowLatencyStatistics.maximumMissingBlockStreak;
+        status->currentResamplerBufferedFrameCount =
+            lowLatencyStatistics.currentResamplerBufferedFrameCount;
+        status->currentPlayableFrameCount =
+            lowLatencyStatistics.currentPlayableFrameCount;
+        status->reacquisitionCount = std::max(
+            status->reacquisitionCount,
+            lowLatencyStatistics.reacquisitionCount
+        );
         status->latestArrivalResidualMilliseconds =
             lowLatencyStatistics.latestArrivalResidual * 1000.0;
         status->p99ArrivalResidualMilliseconds =
@@ -3069,6 +3257,24 @@ void AOOAppleReceiverGetStatus(
             lowLatencyStatistics.maximumDatagramGap * 1000.0;
         status->sourceRealSampleRate =
             lowLatencyStatistics.latestSourceSampleRate;
+    }
+    AooLowLatencyClientReceiveStatistics receiveStatistics{};
+    if (AooClient_getLowLatencyReceiveStatistics(
+            receiver->client,
+            &receiveStatistics
+        ) == kAooOk) {
+        status->socketDatagramObservationCount =
+            receiveStatistics.datagramCount;
+        status->kernelTimestampObservationCount =
+            receiveStatistics.kernelTimestampCount;
+        status->latestKernelDatagramGapMilliseconds =
+            receiveStatistics.latestKernelDatagramGap * 1000.0;
+        status->maximumKernelDatagramGapMilliseconds =
+            receiveStatistics.maximumKernelDatagramGap * 1000.0;
+        status->latestKernelToReceiveDelayMilliseconds =
+            receiveStatistics.latestKernelToReceiveDelay * 1000.0;
+        status->maximumKernelToReceiveDelayMilliseconds =
+            receiveStatistics.maximumKernelToReceiveDelay * 1000.0;
     }
     status->targetLatencyMilliseconds = receiver->targetLatencySeconds.load(
         std::memory_order_acquire

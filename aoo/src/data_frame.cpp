@@ -6,6 +6,20 @@ namespace aoo {
 
 //-------------------------- data_frame_allocator --------------------------------//
 
+size_t data_frame_allocator::reserve(int32_t size, size_t count) {
+    auto index = size_to_bin(size);
+    auto allocated = allocated_counts_[index].load(std::memory_order_relaxed);
+    size_t added = 0;
+    while (allocated < count) {
+        auto frame = allocate_frame(index);
+        frame->size = size;
+        deallocate(reinterpret_cast<data_frame *>(frame));
+        ++allocated;
+        ++added;
+    }
+    return added;
+}
+
 // TODO: should we try to split larger blocks before allocating a new one?
 data_frame* data_frame_allocator::allocate(int32_t size) {
     auto index = size_to_bin(size);
@@ -14,20 +28,7 @@ data_frame* data_frame_allocator::allocate(int32_t size) {
     do {
         if (frame == nullptr) {
             // allocate new frame
-            auto alloc_size = bin_to_alloc_size(index);
-            assert((alloc_size - sizeof(data_frame_header)) >= size);
-            frame = (data_frame_header*)aoo::allocate(alloc_size);
-            frame->next = nullptr;
-            frame->bin_index = index;
-            frame->frame_index = 0;
-#if AOO_DATA_FRAME_LEAK_DETECTION
-            auto num_bytes = num_alloc_bytes_.fetch_add(alloc_size, std::memory_order_relaxed) + alloc_size;
-            auto num_frames = num_alloc_frames_.fetch_add(1, std::memory_order_relaxed) + 1;
-#if AOO_DEBUG_DATA_FRAME_ALLOCATOR
-            LOG_DEBUG("data_frame_allocator: allocate " << alloc_size << " bytes (total bytes: "
-                      << num_bytes << ", total frames: " << num_frames << ")");
-#endif
-#endif
+            frame = allocate_frame(index);
             break;
         }
         // try to reuse existing frame.
@@ -42,6 +43,31 @@ data_frame* data_frame_allocator::allocate(int32_t size) {
               << size << " bytes, total frames: " << num_frames << ")");
 #endif
     return (data_frame*)frame;
+}
+
+data_frame_header* data_frame_allocator::allocate_frame(size_t index) {
+    auto alloc_size = bin_to_alloc_size(index);
+    auto frame = static_cast<data_frame_header *>(aoo::allocate(alloc_size));
+    frame->next = nullptr;
+    frame->bin_index = index;
+    frame->frame_index = 0;
+    allocated_counts_[index].fetch_add(1, std::memory_order_relaxed);
+#if AOO_DATA_FRAME_LEAK_DETECTION
+    auto num_bytes = num_alloc_bytes_.fetch_add(
+        alloc_size,
+        std::memory_order_relaxed
+    ) + alloc_size;
+    auto num_frames = num_alloc_frames_.fetch_add(
+        1,
+        std::memory_order_relaxed
+    ) + 1;
+#if AOO_DEBUG_DATA_FRAME_ALLOCATOR
+    LOG_DEBUG("data_frame_allocator: allocate " << alloc_size
+              << " bytes (total bytes: " << num_bytes
+              << ", total frames: " << num_frames << ")");
+#endif
+#endif
+    return frame;
 }
 
 void data_frame_allocator::deallocate(data_frame *frame) {
@@ -81,6 +107,10 @@ void data_frame_allocator::release_memory() {
             assert(ptr->bin_index >= 0 && ptr->frame_index >= 0);
             auto next = ptr->next;
             auto alloc_size = bin_to_alloc_size(ptr->bin_index);
+            allocated_counts_[ptr->bin_index].fetch_sub(
+                1,
+                std::memory_order_relaxed
+            );
 #if 0
             LOG_DEBUG("data_frame: bin index = " << ptr->bin_index << ", frame index = "
                       << ptr->frame_index << ", alloc size = " << alloc_size);

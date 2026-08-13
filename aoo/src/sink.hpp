@@ -363,7 +363,16 @@ public:
     void observe_low_latency_completion(const net_packet& packet) const;
     void observe_low_latency_stale_datagram() const;
     void observe_low_latency_incomplete_block() const;
+    void observe_low_latency_empty_block() const;
+    void observe_low_latency_reacquisition() const;
     void observe_low_latency_trimmed_backlog(AooUInt64 count) const;
+    void publish_low_latency_playout_state(
+        AooUInt32 bufferedBlocks,
+        AooUInt32 contiguousCompleteBlocks,
+        AooUInt32 missingBlockStreak,
+        AooUInt32 resamplerBufferedFrames,
+        AooUInt32 playableFrames
+    ) const;
     AooError get_low_latency_statistics(
         AooLowLatencySinkStatistics& statistics
     ) const;
@@ -468,7 +477,17 @@ private:
     mutable std::atomic<uint64_t> low_latency_datagram_count_{0};
     mutable std::atomic<uint64_t> low_latency_stale_datagram_count_{0};
     mutable std::atomic<uint64_t> low_latency_incomplete_block_count_{0};
+    mutable std::atomic<uint64_t> low_latency_empty_block_count_{0};
+    mutable std::atomic<uint64_t> low_latency_reacquisition_count_{0};
     mutable std::atomic<uint64_t> low_latency_trimmed_backlog_block_count_{0};
+    mutable std::atomic<uint32_t> low_latency_current_buffered_block_count_{0};
+    mutable std::atomic<uint32_t>
+        low_latency_current_contiguous_complete_block_count_{0};
+    mutable std::atomic<uint32_t> low_latency_current_missing_block_streak_{0};
+    mutable std::atomic<uint32_t> low_latency_maximum_missing_block_streak_{0};
+    mutable std::atomic<uint32_t>
+        low_latency_current_resampler_buffered_frame_count_{0};
+    mutable std::atomic<uint32_t> low_latency_current_playable_frame_count_{0};
     mutable std::atomic<int64_t> low_latency_last_datagram_time_ns_{0};
     mutable std::atomic<int64_t> low_latency_latest_datagram_gap_ns_{0};
     mutable std::atomic<int64_t> low_latency_maximum_datagram_gap_ns_{0};

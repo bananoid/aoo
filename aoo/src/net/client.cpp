@@ -299,6 +299,32 @@ void aoo::net::Client::getLowLatencySendStatistics(
     );
 }
 
+AOO_API AooError AOO_CALL AooClient_getLowLatencyReceiveStatistics(
+    AooClient *client,
+    AooLowLatencyClientReceiveStatistics *statistics
+) {
+    if (!client || !statistics) {
+        return kAooErrorBadArgument;
+    }
+    static_cast<aoo::net::Client *>(client)->getLowLatencyReceiveStatistics(
+        *statistics
+    );
+    return kAooOk;
+}
+
+void aoo::net::Client::getLowLatencyReceiveStatistics(
+    AooLowLatencyClientReceiveStatistics& statistics
+) const {
+    aoo::udp_receive_timing_statistics timing{};
+    udp_client_.get_receive_timing_statistics(timing);
+    statistics.datagramCount = timing.datagram_count;
+    statistics.kernelTimestampCount = timing.kernel_timestamp_count;
+    statistics.latestKernelDatagramGap = timing.latest_kernel_datagram_gap;
+    statistics.maximumKernelDatagramGap = timing.maximum_kernel_datagram_gap;
+    statistics.latestKernelToReceiveDelay = timing.latest_kernel_to_receive_delay;
+    statistics.maximumKernelToReceiveDelay = timing.maximum_kernel_to_receive_delay;
+}
+
 AooInt32 aoo::net::Client::trackedUdpSend(
     void *user,
     const AooByte *data,

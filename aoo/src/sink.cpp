@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <limits>
 
 // use packet-loss-conceilment for buffering.
 // while it reduces audible artifacts, it has the disadvantage that
@@ -51,6 +52,21 @@ const int32_t kDataHeaderSize = kDataMaxAddrSize + 8;
 // args: 8 bytes (stream ID + count)
 const int32_t kBinDataHeaderSize = kAooBinMsgLargeHeaderSize
     + 8 + AOO_LOW_LATENCY_PACKET_HEADER_SIZE;
+
+int32_t low_latency_resident_blocks(
+    AooUInt32 targetFrames,
+    AooInt32 blockFrames
+) {
+    if (targetFrames == 0 || blockFrames <= 0) {
+        return 1;
+    }
+    // The oldest block is rendered while the configured target frames remain
+    // queued behind it. Three block intervals therefore require four resident
+    // blocks; waiting for only three produces a two-interval playout delay.
+    return static_cast<int32_t>(std::ceil(
+        static_cast<double>(targetFrames) / blockFrames
+    )) + 1;
+}
 
 } // aoo
 
@@ -671,11 +687,57 @@ void aoo::Sink::observe_low_latency_incomplete_block() const {
     low_latency_incomplete_block_count_.fetch_add(1, std::memory_order_relaxed);
 }
 
+void aoo::Sink::observe_low_latency_empty_block() const {
+    low_latency_empty_block_count_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void aoo::Sink::observe_low_latency_reacquisition() const {
+    low_latency_reacquisition_count_.fetch_add(1, std::memory_order_relaxed);
+}
+
 void aoo::Sink::observe_low_latency_trimmed_backlog(AooUInt64 count) const {
     low_latency_trimmed_backlog_block_count_.fetch_add(
         count,
         std::memory_order_relaxed
     );
+}
+
+void aoo::Sink::publish_low_latency_playout_state(
+        AooUInt32 bufferedBlocks,
+        AooUInt32 contiguousCompleteBlocks,
+        AooUInt32 missingBlockStreak,
+        AooUInt32 resamplerBufferedFrames,
+        AooUInt32 playableFrames) const {
+    low_latency_current_buffered_block_count_.store(
+        bufferedBlocks,
+        std::memory_order_relaxed
+    );
+    low_latency_current_contiguous_complete_block_count_.store(
+        contiguousCompleteBlocks,
+        std::memory_order_relaxed
+    );
+    low_latency_current_missing_block_streak_.store(
+        missingBlockStreak,
+        std::memory_order_relaxed
+    );
+    low_latency_current_resampler_buffered_frame_count_.store(
+        resamplerBufferedFrames,
+        std::memory_order_relaxed
+    );
+    low_latency_current_playable_frame_count_.store(
+        playableFrames,
+        std::memory_order_relaxed
+    );
+    auto maximum = low_latency_maximum_missing_block_streak_.load(
+        std::memory_order_relaxed
+    );
+    while (missingBlockStreak > maximum
+           && !low_latency_maximum_missing_block_streak_.compare_exchange_weak(
+               maximum,
+               missingBlockStreak,
+               std::memory_order_relaxed,
+               std::memory_order_relaxed
+           )) {}
 }
 
 void aoo::Sink::observe_low_latency_completion(const net_packet& packet) const {
@@ -725,8 +787,38 @@ AooError aoo::Sink::get_low_latency_statistics(
     statistics.incompleteBlockCount = low_latency_incomplete_block_count_.load(
         std::memory_order_relaxed
     );
+    statistics.emptyBlockCount = low_latency_empty_block_count_.load(
+        std::memory_order_relaxed
+    );
+    statistics.reacquisitionCount = low_latency_reacquisition_count_.load(
+        std::memory_order_relaxed
+    );
     statistics.trimmedBacklogBlockCount =
         low_latency_trimmed_backlog_block_count_.load(
+            std::memory_order_relaxed
+        );
+    statistics.currentBufferedBlockCount =
+        low_latency_current_buffered_block_count_.load(
+            std::memory_order_relaxed
+        );
+    statistics.currentContiguousCompleteBlockCount =
+        low_latency_current_contiguous_complete_block_count_.load(
+            std::memory_order_relaxed
+        );
+    statistics.currentMissingBlockStreak =
+        low_latency_current_missing_block_streak_.load(
+            std::memory_order_relaxed
+        );
+    statistics.maximumMissingBlockStreak =
+        low_latency_maximum_missing_block_streak_.load(
+            std::memory_order_relaxed
+        );
+    statistics.currentResamplerBufferedFrameCount =
+        low_latency_current_resampler_buffered_frame_count_.load(
+            std::memory_order_relaxed
+        );
+    statistics.currentPlayableFrameCount =
+        low_latency_current_playable_frame_count_.load(
             std::memory_order_relaxed
         );
     statistics.latestDatagramGap = static_cast<double>(
@@ -1514,7 +1606,12 @@ void source_desc::update(const Sink& s){
                     ? s.low_latency_target()
                     : low_latency_configuration_.targetLatencyFrames;
         }
-        int32_t latency_blocks = std::ceil(latency * convert);
+        int32_t latency_blocks = low_latency_enabled_
+            ? low_latency_resident_blocks(
+                low_latency_configuration_.targetLatencyFrames,
+                format_->blockSize
+              )
+            : std::ceil(latency * convert);
         // minimum buffer size depends on resampling and reblocking!
         auto resample = (double)s.samplerate() / (double)format_->sampleRate;
         auto reblock = (double)s.blocksize() / (double)format_->blockSize;
@@ -1552,6 +1649,48 @@ void source_desc::update(const Sink& s){
             flush_packet_queue(); // !
             frame_allocator_.release_memory();
 #endif
+        }
+
+        if (low_latency_enabled_) {
+            const int32_t bytes_per_sample =
+                low_latency_configuration_.pcmFormat
+                    == kAooLowLatencyPcmInt24 ? 3 : 4;
+            const int64_t block_bytes =
+                static_cast<int64_t>(low_latency_configuration_.channelCount)
+                * low_latency_configuration_.blockFrames
+                * bytes_per_sample;
+            const int32_t max_frame_bytes =
+                low_latency_configuration_.datagramBytes
+                - kBinDataHeaderSize;
+            if (block_bytes > 0 && max_frame_bytes > 0) {
+                const size_t full_frames = static_cast<size_t>(
+                    block_bytes / max_frame_bytes
+                );
+                const int32_t final_frame_bytes = static_cast<int32_t>(
+                    block_bytes % max_frame_bytes
+                );
+                const size_t frames_per_block = full_frames
+                    + (final_frame_bytes > 0 ? 1 : 0);
+                // Frames move from the network queue into the jitter buffer,
+                // so capacity plus the active playout target covers both
+                // stores without allocating in the steady receive path.
+                const size_t reserved_blocks = static_cast<size_t>(
+                    jitter_buffersize + latency_blocks_
+                );
+                packet_queue_.reserve(reserved_blocks * frames_per_block);
+                if (full_frames > 0) {
+                    frame_allocator_.reserve(
+                        max_frame_bytes,
+                        reserved_blocks * full_frames
+                    );
+                }
+                if (final_frame_bytes > 0) {
+                    frame_allocator_.reserve(
+                        final_frame_bytes,
+                        reserved_blocks
+                    );
+                }
+            }
         }
 
         reset_stream();
@@ -2678,12 +2817,9 @@ bool source_desc::try_decode_block(const Sink& s, AooSample* buffer, stream_stat
                 != low_latency_configuration_.targetLatencyFrames) {
             const int32_t previousLatencyBlocks = latency_blocks_;
             low_latency_configuration_.targetLatencyFrames = requestedTarget;
-            latency_blocks_ = std::max<int32_t>(
-                1,
-                static_cast<int32_t>(std::ceil(
-                    static_cast<double>(requestedTarget)
-                        / format_->blockSize
-                ))
+            latency_blocks_ = low_latency_resident_blocks(
+                requestedTarget,
+                format_->blockSize
             );
             latency_samples_ = std::max<int32_t>(
                 1,
@@ -2704,6 +2840,40 @@ bool source_desc::try_decode_block(const Sink& s, AooSample* buffer, stream_stat
             }
         }
     }
+    auto publishLowLatencyState = [&]() {
+        if (!low_latency_enabled_) {
+            return;
+        }
+        AooUInt32 contiguousCompleteBlocks = 0;
+        for (const auto& block : jitter_buffer_) {
+            if (!block.complete()) {
+                break;
+            }
+            contiguousCompleteBlocks++;
+        }
+        const auto resamplerBufferedFrames = static_cast<AooUInt32>(
+            std::max(0, resampler_.readable_frames())
+        );
+        const auto contiguousOutputFrames = static_cast<uint64_t>(std::llround(
+            static_cast<double>(contiguousCompleteBlocks)
+                * format_->blockSize
+                * s.samplerate()
+                / format_->sampleRate
+        ));
+        const auto playableFrames = static_cast<AooUInt32>(std::min<uint64_t>(
+            static_cast<uint64_t>(resamplerBufferedFrames)
+                + contiguousOutputFrames,
+            std::numeric_limits<AooUInt32>::max()
+        ));
+        s.publish_low_latency_playout_state(
+            static_cast<AooUInt32>(jitter_buffer_.size()),
+            contiguousCompleteBlocks,
+            static_cast<AooUInt32>(std::max(0, consecutive_missing_blocks_)),
+            resamplerBufferedFrames,
+            playableFrames
+        );
+    };
+    publishLowLatencyState();
     // first handle buffering.
     if (stream_state_ == stream_state::buffering) {
         // if stopped during buffering, just fake a buffer underrun.
@@ -2806,7 +2976,7 @@ bool source_desc::try_decode_block(const Sink& s, AooSample* buffer, stream_stat
             // HACK: stop buffering after waiting too long; this is for the case where
             // where the source stops sending data while still buffering, but we don't
             // receive a /stop message (and thus never would become 'inactive').
-            if (elapsed > latency_samples_ * 4) {
+            if (!low_latency_enabled_ && elapsed > latency_samples_ * 4) {
                 LOG_VERBOSE("AooSink: abort buffering after " << elapsed << " samples");
                 return false;
             }
@@ -2880,6 +3050,46 @@ bool source_desc::try_decode_block(const Sink& s, AooSample* buffer, stream_stat
         }
     }
 
+    if (low_latency_enabled_
+        && low_latency_configuration_.profile
+            == kAooLowLatencyProfileDeterministicWired
+        && stream_state_ == stream_state::active) {
+        int32_t completeBlocks = 0;
+        for (const auto& block : jitter_buffer_) {
+            if (!block.complete()) {
+                break;
+            }
+            completeBlocks++;
+        }
+        const int32_t trimCount = std::max(0, completeBlocks - latency_blocks_);
+        if (trimCount > 0) {
+            const auto resample = static_cast<double>(s.samplerate())
+                / static_cast<double>(format_->sampleRate);
+            for (int32_t index = 0; index < trimCount; ++index) {
+                const auto& stale = jitter_buffer_.front();
+                const auto frames = std::max<uint64_t>(
+                    stale.block_frames,
+                    static_cast<uint64_t>(format_->blockSize)
+                );
+                const auto blockEnd = stale.absolute_sample_position + frames;
+                auto current = last_absolute_sample_position_.load(
+                    std::memory_order_relaxed
+                );
+                while (current < blockEnd
+                       && !last_absolute_sample_position_.compare_exchange_weak(
+                           current,
+                           blockEnd,
+                           std::memory_order_release,
+                           std::memory_order_relaxed
+                       )) {}
+                stream_samples_ += static_cast<double>(frames) * resample;
+                jitter_buffer_.pop();
+            }
+            s.observe_low_latency_trimmed_backlog(trimCount);
+            publishLowLatencyState();
+        }
+    }
+
     if (jitter_buffer_.empty()) {
         if (low_latency_enabled_ && stream_state_ == stream_state::active) {
             const auto framesize = format_->blockSize;
@@ -2903,8 +3113,11 @@ bool source_desc::try_decode_block(const Sink& s, AooSample* buffer, stream_stat
                 std::memory_order_acq_rel
             );
             stats.dropped++;
+            s.observe_low_latency_empty_block();
             consecutive_missing_blocks_++;
             if (consecutive_missing_blocks_ >= 4) {
+                publishLowLatencyState();
+                s.observe_low_latency_reacquisition();
                 consecutive_missing_blocks_ = 0;
                 jitter_buffer_.reset();
                 resampler_.reset();
@@ -2918,6 +3131,7 @@ bool source_desc::try_decode_block(const Sink& s, AooSample* buffer, stream_stat
                 );
                 queue_event(std::move(buffering));
             }
+            publishLowLatencyState();
             return true;
         }
     #if 0
@@ -3092,6 +3306,8 @@ bool source_desc::try_decode_block(const Sink& s, AooSample* buffer, stream_stat
             );
             consecutive_missing_blocks_++;
             if (consecutive_missing_blocks_ >= 4) {
+                publishLowLatencyState();
+                s.observe_low_latency_reacquisition();
                 consecutive_missing_blocks_ = 0;
                 jitter_buffer_.reset();
                 resampler_.reset();
@@ -3107,12 +3323,14 @@ bool source_desc::try_decode_block(const Sink& s, AooSample* buffer, stream_stat
                     0
                 );
                 queue_event(std::move(buffering));
+                publishLowLatencyState();
                 return true;
             }
         }
     }
 
     jitter_buffer_.pop();
+    publishLowLatencyState();
 
     return true;
 }

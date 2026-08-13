@@ -10,7 +10,12 @@ import Testing
     #expect(configuration.format == .float32)
     #expect(configuration.blockSize == 64)
     #expect(configuration.datagramSize == 1_400)
-    #expect(configuration.targetLatencyMilliseconds == 4)
+    #expect(
+        abs(
+            configuration.targetLatencyMilliseconds
+                - 3 * configuration.blockDurationMilliseconds
+        ) < 0.000_001
+    )
     #expect(configuration.channelMap == Array(0..<20))
     #expect(configuration.capabilities == .required)
 }

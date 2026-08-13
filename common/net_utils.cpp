@@ -788,7 +788,11 @@ int base_socket::send(const void *buf, int size) {
 }
 
 std::pair<bool, int> base_socket::do_receive(void *buf, int size,
-                                             ip_address* addr, double timeout) {
+                                             ip_address* addr, double timeout,
+                                             uint64_t *monotonic_timestamp) {
+    if (monotonic_timestamp) {
+        *monotonic_timestamp = 0;
+    }
     if (timeout >= 0) {
         // non-blocking receive via poll()
         struct pollfd p;
@@ -809,6 +813,46 @@ std::pair<bool, int> base_socket::do_receive(void *buf, int size,
         }
     }
     int ret = 0;
+#if defined(__APPLE__)
+    if (monotonic_timestamp) {
+        struct iovec vector{};
+        vector.iov_base = buf;
+        vector.iov_len = static_cast<size_t>(size);
+        union {
+            struct cmsghdr alignment;
+            char bytes[CMSG_SPACE(sizeof(uint64_t))];
+        } control{};
+        struct msghdr message{};
+        message.msg_iov = &vector;
+        message.msg_iovlen = 1;
+        message.msg_control = control.bytes;
+        message.msg_controllen = sizeof(control.bytes);
+        if (addr) {
+            addr->reserve();
+            message.msg_name = addr->address_ptr();
+            message.msg_namelen = *addr->length_ptr();
+        }
+        ret = ::recvmsg(socket_, &message, 0);
+        if (addr) {
+            *addr->length_ptr() = message.msg_namelen;
+        }
+        if (ret >= 0) {
+            for (auto *header = CMSG_FIRSTHDR(&message); header;
+                 header = CMSG_NXTHDR(&message, header)) {
+                if (header->cmsg_level == SOL_SOCKET
+                    && header->cmsg_type == SCM_TIMESTAMP_MONOTONIC
+                    && header->cmsg_len >= CMSG_LEN(sizeof(uint64_t))) {
+                    std::memcpy(
+                        monotonic_timestamp,
+                        CMSG_DATA(header),
+                        sizeof(*monotonic_timestamp)
+                    );
+                    break;
+                }
+            }
+        }
+    } else
+#endif
     if (addr) {
         addr->reserve();
         ret = ::recvfrom(socket_, (char *)buf, size, 0,
@@ -821,6 +865,22 @@ std::pair<bool, int> base_socket::do_receive(void *buf, int size,
     } else {
         throw socket_error(socket::get_last_error());
     }
+}
+
+bool base_socket::enable_monotonic_receive_timestamps(bool enabled) {
+#if defined(__APPLE__)
+    const int value = enabled ? 1 : 0;
+    return ::setsockopt(
+        socket_,
+        SOL_SOCKET,
+        SO_TIMESTAMP_MONOTONIC,
+        &value,
+        sizeof(value)
+    ) == 0;
+#else
+    (void)enabled;
+    return false;
+#endif
 }
 
 #define DEBUG_SOCKET_BUFFER 0

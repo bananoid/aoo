@@ -82,6 +82,8 @@ public:
     data_frame_allocator() = default;
     ~data_frame_allocator() { release_memory(); }
 
+    // Must only be called while producers and consumers are stopped.
+    size_t reserve(int32_t size, size_t count);
     data_frame* allocate(int32_t size);
     void deallocate(data_frame *frame);
 
@@ -89,9 +91,11 @@ public:
 private:
     static size_t size_to_bin(size_t size);
     static size_t bin_to_alloc_size(size_t index);
+    data_frame_header* allocate_frame(size_t index);
 
     static constexpr size_t bin_count = detail::calc_bin_count(min_bin_size, max_bin_size);
     std::array<std::atomic<data_frame_header*>, bin_count> bins_{}; // initialize!
+    std::array<std::atomic<size_t>, bin_count> allocated_counts_{};
 #if AOO_DATA_FRAME_LEAK_DETECTION
     std::atomic<int> num_alloc_bytes_{0};
     std::atomic<int> num_alloc_frames_{0};
