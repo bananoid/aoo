@@ -13,7 +13,7 @@ import Testing
     #expect(
         abs(
             configuration.targetLatencyMilliseconds
-                - 3 * configuration.blockDurationMilliseconds
+                - 4 * configuration.blockDurationMilliseconds
         ) < 0.000_001
     )
     #expect(configuration.channelMap == Array(0..<20))

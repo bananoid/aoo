@@ -116,7 +116,7 @@ public struct AOOStreamConfiguration: Codable, Equatable, Sendable {
             sampleRate: sampleRate,
             blockSize: blockSize,
             datagramSize: 1_400,
-            targetLatencyMilliseconds: max(4, 3 * Double(blockSize) / sampleRate * 1_000),
+            targetLatencyMilliseconds: max(4, 4 * Double(blockSize) / sampleRate * 1_000),
             channelMap: channelMap
         )
     }
